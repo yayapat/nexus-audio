@@ -1,9 +1,6 @@
-// ============================================================================
 // Nexus Audio — Electron Main Process
-// ============================================================================
-// Main process สำหรับแอป Nexus Audio: music player & downloader
-// รองรับ: window management, tray, media keys, download (yt-dlp), metadata
-// ============================================================================
+// Main process for Nexus Audio app: music player & downloader
+// Supports: window management, tray, media keys, download (yt-dlp), metadata
 
 const {
   app,
@@ -25,9 +22,7 @@ const mm = require('music-metadata');
 // Disable Wayland color manager to prevent error logs on Linux/Wayland (e.g. CachyOS)
 app.commandLine.appendSwitch('disable-features', 'WaylandWpColorManagerV1');
 
-// ============================================================================
 // Constants & Paths
-// ============================================================================
 
 const ICON_PATH = path.join(__dirname, '../assets/icon.png');
 const AUDIO_EXTENSIONS = [
@@ -38,21 +33,17 @@ const AUDIO_FILTER = {
   extensions: ['mp3', 'wav', 'flac', 'm4a', 'ogg', 'wma', 'aac', 'opus', 'webm'],
 };
 
-// ============================================================================
 // Global State
-// ============================================================================
 
 let win = null;
 let tray = null;
 let config = {};
 let isMiniplayer = false;
-let previousBounds = null;   // เก็บ bounds ก่อนเข้า mini player
-let saveBoundsTimer = null;  // debounce timer สำหรับ save window bounds
-let currentDlPath = '';      // download path ปัจจุบัน
+let previousBounds = null;   // Store bounds before entering mini player
+let saveBoundsTimer = null;  // Debounce timer for saving window bounds
+let currentDlPath = '';      // Current download path
 
-// ============================================================================
 // Config Management
-// ============================================================================
 
 function getConfigPath() {
   return path.join(app.getPath('userData'), 'nexus_config.json');
@@ -63,10 +54,10 @@ function loadConfig() {
     const raw = fs.readFileSync(getConfigPath(), 'utf-8');
     config = JSON.parse(raw);
   } catch {
-    // ไม่มีไฟล์ config หรืออ่านไม่ได้ — ใช้ค่า default
+    // No config file or unable to read — using defaults
     config = {};
   }
-  // ตั้ง download path default เป็น ~/Music ถ้าไม่มี
+  // Set default download path to ~/Music if none exists
   if (!config.dlPath) {
     config.dlPath = path.join(app.getPath('music') || app.getPath('home'), 'NexusAudio');
   }
@@ -82,11 +73,9 @@ function saveConfig(data) {
   }
 }
 
-// ============================================================================
 // Helpers
-// ============================================================================
 
-/** ค้นหาไฟล์เสียงทั้งหมดใน directory แบบ recursive (Asynchronous) */
+/** Recursively find all audio files in directory (Asynchronous) */
 async function findAudioFiles(dir) {
   try {
     const entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -106,12 +95,12 @@ async function findAudioFiles(dir) {
   }
 }
 
-/** Sanitize text สำหรับ log output — escape HTML characters */
+/** Sanitize text for log output — escape HTML characters */
 function sanitize(text) {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/** Extract metadata จากไฟล์เสียง — return object สำหรับ renderer */
+/** Extract metadata from audio file — return object for renderer */
 async function extractMetadata(filePath) {
   try {
     const metadata = await mm.parseFile(filePath);
@@ -150,12 +139,10 @@ async function extractMetadata(filePath) {
   }
 }
 
-// ============================================================================
 // Window Creation
-// ============================================================================
 
 function createWindow() {
-  // ดึง bounds จาก config (จำตำแหน่ง/ขนาดหน้าต่าง)
+  // Retrieve bounds from config (remember window position/size)
   const bounds = config.windowBounds || {};
 
   win = new BrowserWindow({
@@ -174,7 +161,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, 'preload.js'),
-      webSecurity: false, // จำเป็นสำหรับ file:// audio playback
+      webSecurity: false, // Required for file:// audio playback
     },
   });
 
@@ -194,20 +181,20 @@ function createWindow() {
     }
   });
 
-  // ---------- Window Events ----------
+  // Window Events
 
-  // ปิดหน้าต่าง → ซ่อนไปที่ tray แทนการ quit (ถ้ามี tray)
+  // Close window → hide to tray instead of quitting (if tray exists)
   win.on('close', (e) => {
     if (tray && !app.isQuitting) {
       e.preventDefault();
       win.hide();
-      win.webContents.send('media:pause'); // หยุดเพลงเมื่อปิดแอปไปที่ tray
+      win.webContents.send('media:pause'); // Pause music when hiding app to tray
     }
   });
 
-  // Save bounds เมื่อ resize/move (debounce 500ms)
+  // Save bounds on resize/move (debounce 500ms)
   const saveBounds = () => {
-    if (isMiniplayer) return; // ไม่บันทึก bounds ตอนอยู่ใน mini mode
+    if (isMiniplayer) return; // Do not save bounds in mini player mode
     clearTimeout(saveBoundsTimer);
     saveBoundsTimer = setTimeout(() => {
       if (win && !win.isDestroyed()) {
@@ -221,9 +208,7 @@ function createWindow() {
   win.on('move', saveBounds);
 }
 
-// ============================================================================
 // System Tray (F21)
-// ============================================================================
 
 function createTray() {
   try {
@@ -234,7 +219,7 @@ function createTray() {
     tray.setToolTip('Nexus Audio');
     buildTrayMenu('Not Playing', false);
 
-    // คลิก tray icon → แสดง/focus หน้าต่าง
+    // Click tray icon → show/focus window
     tray.on('click', () => {
       if (win) {
         win.show();
@@ -284,9 +269,7 @@ function buildTrayMenu(title, isPlaying) {
 
 
 
-// ============================================================================
 // IPC Handlers — Window
-// ============================================================================
 
 function setupWindowIPC() {
   ipcMain.on('win:minimize', () => {
@@ -306,7 +289,7 @@ function setupWindowIPC() {
     if (!win) return;
     if (tray) {
       win.hide();
-      win.webContents.send('media:pause'); // หยุดเพลงเมื่อปิดแอปไปที่ tray
+      win.webContents.send('media:pause'); // Pause music when hiding app to tray
     } else {
       app.isQuitting = true;
       app.quit();
@@ -317,7 +300,7 @@ function setupWindowIPC() {
     if (!win) return;
 
     if (isMiniplayer) {
-      // กลับสู่โหมดปกติ
+      // Return to normal mode
       isMiniplayer = false;
       if (previousBounds) {
         win.setBounds(previousBounds);
@@ -326,7 +309,7 @@ function setupWindowIPC() {
       win.setSkipTaskbar(false);
       win.setMinimumSize(700, 450);
     } else {
-      // เข้า mini player mode
+      // Enter mini player mode
       previousBounds = win.getBounds();
       isMiniplayer = true;
       win.setMinimumSize(300, 80);
@@ -338,9 +321,7 @@ function setupWindowIPC() {
   });
 }
 
-// ============================================================================
 // IPC Handlers — Dialogs
-// ============================================================================
 
 function setupDialogIPC() {
   ipcMain.handle('dlg:open-files', async () => {
@@ -372,9 +353,7 @@ function setupDialogIPC() {
   });
 }
 
-// ============================================================================
 // IPC Handlers — Player
-// ============================================================================
 
 function setupPlayerIPC() {
   ipcMain.handle('player:metadata', async (_event, filePath) => {
@@ -399,15 +378,13 @@ function setupPlayerIPC() {
   });
 }
 
-// ============================================================================
 // IPC Handlers — Playlist
-// ============================================================================
 
 function setupPlaylistIPC() {
   const stateFile = () => path.join(app.getPath('userData'), 'playlist_state.json');
   const playlistsDir = () => path.join(app.getPath('userData'), 'playlists');
 
-  // Save playlist state (ล่าสุด — tracks, position, etc.)
+  // Save playlist state (latest — tracks, position, etc.)
   ipcMain.on('pl:save-state', async (_event, data) => {
     try {
       await fs.promises.writeFile(stateFile(), JSON.stringify(data), 'utf-8');
@@ -494,9 +471,7 @@ function setupPlaylistIPC() {
   });
 }
 
-// ============================================================================
 // IPC Handlers — Download
-// ============================================================================
 
 const activeDownloads = new Map();
 
@@ -506,7 +481,7 @@ function setupDownloadIPC() {
     return currentDlPath;
   });
 
-  // Change download path ผ่าน folder picker
+  // Change download path via folder picker
   ipcMain.handle('dl:change-path', async () => {
     try {
       const result = await dialog.showOpenDialog(win, {
@@ -586,7 +561,7 @@ function setupDownloadIPC() {
     }
   });
 
-  // Start download — ใช้ spawn() เพื่อหลีกเลี่ยง command injection
+  // Start download — use spawn() to avoid command injection
   ipcMain.on('dl:start', async (_event, { urls, format, quality }) => {
     if (!Array.isArray(urls) || urls.length === 0) return;
 
@@ -624,14 +599,14 @@ function setupDownloadIPC() {
 }
 
 /**
- * ดาวน์โหลดไฟล์จาก URL เดียว ผ่าน yt-dlp (spawn)
- * - ใช้ --print after_move:filepath เพื่อจับ path ของไฟล์ที่ดาวน์โหลดเสร็จ
- * - Parse progress จาก stdout
- * - ส่ง events กลับไปที่ renderer
+ * Download a single file from URL via yt-dlp (spawn)
+ * - Use --print after_move:filepath to capture the downloaded file path
+ * - Parse progress from stdout
+ * - Send events back to renderer
  */
 function downloadSingleURL(url, format, quality) {
   return new Promise(async (resolve) => {
-    // ดึง path ปัจจุบันของ yt-dlp และ ffmpeg
+    // Get current path for yt-dlp and ffmpeg
     const binDir = path.join(app.getPath('userData'), 'bin');
     let ytdlpName = 'yt-dlp';
     if (process.platform === 'win32') ytdlpName = 'yt-dlp.exe';
@@ -659,7 +634,7 @@ function downloadSingleURL(url, format, quality) {
       url,
     ];
 
-    // เพิ่ม audio quality สำหรับ mp3/m4a
+    // Add audio quality for mp3/m4a
     if ((format === 'mp3' || format === 'm4a') && quality) {
       args.splice(args.indexOf('--newline') + 1, 0, '--audio-quality', quality + 'k');
     }
@@ -673,7 +648,7 @@ function downloadSingleURL(url, format, quality) {
       for (const line of lines) {
         if (!line.trim()) continue;
 
-        // ส่ง log ทุกบรรทัดไปที่ renderer
+        // Send every log line to renderer
         win?.webContents.send('dl:log', sanitize(line));
 
         // Parse progress: [download]   0.4% of  246.27KiB at  Unknown B/s ETA Unknown
@@ -751,9 +726,7 @@ function downloadSingleURL(url, format, quality) {
   });
 }
 
-// ============================================================================
 // IPC Handlers — Config
-// ============================================================================
 
 function setupConfigIPC() {
   ipcMain.handle('cfg:get', async (_event, key) => {
@@ -774,9 +747,7 @@ function setupConfigIPC() {
   });
 }
 
-// ============================================================================
 // IPC Handlers — Context Menu
-// ============================================================================
 
 function setupContextMenuIPC() {
   ipcMain.on('ctx:menu', () => {
@@ -791,9 +762,7 @@ function setupContextMenuIPC() {
   });
 }
 
-// ============================================================================
 // IPC Handlers — Tray Update
-// ============================================================================
 
 function setupTrayIPC() {
   ipcMain.on('tray:update', (_event, { title, isPlaying }) => {
@@ -801,17 +770,15 @@ function setupTrayIPC() {
   });
 }
 
-// ============================================================================
 // App Lifecycle
-// ============================================================================
 
-// ป้องกัน multiple instances
+// Prevent multiple instances
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    // เมื่อ user เปิด instance ที่ 2 → แสดงหน้าต่างของ instance แรก
+    // When user opens 2nd instance → show the 1st instance's window
     if (win) {
       if (win.isMinimized()) win.restore();
       win.show();
@@ -821,18 +788,18 @@ if (!gotTheLock) {
 }
 
 app.whenReady().then(() => {
-  // โหลด config ก่อนสร้าง window
+  // Load config before creating window
   loadConfig();
 
-  // สร้างหน้าต่างหลัก
+  // Create main window
   createWindow();
 
-  // สร้าง system tray
+  // Create system tray
   createTray();
 
 
 
-  // ตั้ง IPC handlers ทั้งหมด
+  // Setup all IPC handlers
   setupWindowIPC();
   setupDialogIPC();
   setupPlayerIPC();
@@ -843,7 +810,7 @@ app.whenReady().then(() => {
   setupTrayIPC();
 });
 
-// macOS: สร้างหน้าต่างใหม่เมื่อคลิก dock icon ถ้าไม่มี window
+// macOS: Create new window when dock icon is clicked if no window exists
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
@@ -852,7 +819,7 @@ app.on('activate', () => {
   }
 });
 
-// ปิดแอปเมื่อปิดหน้าต่างทั้งหมด (ยกเว้น macOS)
+// Quit app when all windows are closed (except macOS)
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
@@ -861,7 +828,7 @@ app.on('window-all-closed', () => {
 
 
 
-// จับ flag สำหรับ quit จริงๆ (ไม่ใช่แค่ hide)
+// Catch flag for actual quit (not just hide)
 app.isQuitting = false;
 app.on('before-quit', () => {
   app.isQuitting = true;

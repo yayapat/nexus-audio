@@ -26,7 +26,7 @@ window.addEventListener('contextmenu', (e) => {
 
 // --- Local Keyboard Shortcuts ---
 window.addEventListener('keydown', (e) => {
-  // ไม่ให้ทำงานถ้ากำลังพิมพ์ในช่องกรอกข้อความ
+  // Do not trigger if typing in a text input field
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
   if (e.code === 'Space') {
