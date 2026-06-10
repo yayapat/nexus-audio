@@ -1,0 +1,57 @@
+{
+  "name": "nexus-audio",
+  "version": "1.0.0",
+  "description": "Nexus Audio - Modern music player & downloader",
+  "main": "src/app.js",
+  "author": "NovaX",
+  "license": "MIT",
+  "homepage": "https://github.com/yayapat/nexus-audio",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yayapat/nexus-audio.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "build": "electron-builder --linux",
+    "build:all": "electron-builder --linux AppImage deb rpm snap tar.gz"
+  },
+  "build": {
+    "appId": "com.nexus.audio",
+    "productName": "Nexus Audio",
+    "executableName": "nexus-audio",
+    "artifactName": "nexus-audio-${version}.${ext}",
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**/*"
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm",
+        "snap",
+        "tar.gz"
+      ],
+      "icon": "assets/icon.png",
+      "category": "Audio",
+      "maintainer": "NovaX",
+      "synopsis": "Modern music player & downloader"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    }
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.3.0",
+    "music-metadata": "^7.14.0"
+  },
+  "devDependencies": {
+    "electron": "^42.4.0",
+    "electron-builder": "^25.1.8"
+  }
+}

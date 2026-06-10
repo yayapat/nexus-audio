@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en" class="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nexus Audio</title>
+<script src="https://unpkg.com/@phosphor-icons/web"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+  }
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&display=swap');
+
+body {
+  font-family: 'Outfit', sans-serif;
+  background-color: transparent; 
+  user-select: none; overflow: hidden; margin: 0; padding: 0;
+}
+
+.app-container {
+  border-radius: 16px; overflow: hidden;
+  border: 1px solid rgba(0,0,0,0.1);
+}
+
+.titlebar { -webkit-app-region: drag; }
+.no-drag { -webkit-app-region: no-drag; }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+.dark ::-webkit-scrollbar-thumb { background: #475569; }
+.dark ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+.tab-content { display: none; }
+.tab-content.active { display: flex; animation: fadeIn 0.3s ease-out; }
+@keyframes fadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
+
+.nav-item.active { color: #0ea5e9; font-weight: bold; }
+.nav-item.active .nav-indicator { opacity: 1; }
+
+/* Custom Sliders */
+input[type=range] { -webkit-appearance: none; background: transparent; }
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; height: 12px; width: 12px; border-radius: 50%;
+  background: #0ea5e9; cursor: pointer; margin-top: -4px;
+  box-shadow: 0 0 10px rgba(14, 165, 233, 0.5); transition: transform 0.1s;
+}
+input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.3); }
+input[type=range]::-webkit-slider-runnable-track {
+  width: 100%; height: 4px; cursor: pointer; background: #cbd5e1; border-radius: 2px;
+}
+.dark input[type=range]::-webkit-slider-runnable-track { background: #334155; }
+input[type=range]:disabled { opacity: 0.5; cursor: not-allowed; }
+input[type=range]:disabled::-webkit-slider-thumb { cursor: not-allowed; background: #94a3b8; box-shadow: none; }
+input[type=range]:disabled::-webkit-slider-runnable-track { cursor: not-allowed; }
+
+/* Minimal Horizontal Volume Slider */
+.vol-slider-custom {
+  -webkit-appearance: none; background: #e2e8f0; border-radius: 2px; cursor: pointer;
+}
+.dark .vol-slider-custom { background: #334155; }
+.vol-slider-custom::-webkit-slider-thumb {
+  -webkit-appearance: none; height: 10px; width: 10px; border-radius: 50%;
+  background: #0ea5e9; cursor: pointer; box-shadow: 0 0 5px rgba(14, 165, 233, 0.5);
+  transition: transform 0.1s;
+}
+.vol-slider-custom::-webkit-slider-thumb:hover { transform: scale(1.3); }
+
+.track-item.dragging { opacity: 0.5; background: #e0f2fe; border: 1px dashed #0ea5e9; }
+.dark .track-item.dragging { background: #0c4a6e; }
+.track-item.drop-before { border-top: 2px solid #0ea5e9 !important; }
+.track-item.drop-after  { border-bottom: 2px solid #0ea5e9 !important; }
+
+/* Tooltip */
+.tooltip {
+  visibility: hidden; position: absolute; bottom: 120%; left: 50%; transform: translateX(-50%);
+  background-color: #1e293b; color: #f8fafc; text-align: center; padding: 4px 8px;
+  border-radius: 6px; font-size: 11px; font-weight: 600; opacity: 0;
+  transition: opacity 0.2s, visibility 0.2s; white-space: nowrap; pointer-events: none; z-index: 100;
+}
+.dark .tooltip { background-color: #f8fafc; color: #1e293b; }
+.group:hover .tooltip { visibility: visible; opacity: 1; }
+
+/* Checkbox */
+input[type="checkbox"] { accent-color: #0ea5e9; }
+</style>
+</head>
+<body class="flex flex-col h-screen w-screen relative p-[2px] bg-transparent text-slate-800 dark:text-slate-200">
+
+<div class="app-container flex flex-col h-full w-full relative shadow-2xl transition-all duration-300 bg-slate-50 dark:bg-slate-900 dark:border-slate-700">
+<!-- Titlebar พร้อมปุ่ม ย่อ ขยาย ปิด -->
+<div class="titlebar h-12 w-full flex justify-between items-center px-5 z-50 bg-white/50 dark:bg-slate-800/80 backdrop-blur-sm border-b border-slate-100 dark:border-slate-700">
+<div class="flex items-center gap-2">
+<i class="ph-fill ph-waveform text-sky-500 text-lg animate-pulse"></i>
+<span class="text-xs font-bold text-slate-700 dark:text-slate-300 tracking-widest uppercase">NEXUS AUDIO</span>
+</div>
+<div class="flex gap-2 no-drag">
+<button id="themeBtn" style="-webkit-app-region: no-drag;" class="text-slate-400 hover:text-sky-500 dark:hover:text-amber-400 transition flex items-center justify-center w-8 h-8 rounded hover:bg-slate-100 dark:hover:bg-slate-700"><i class="ph-bold ph-moon text-sm dark:hidden"></i><i class="ph-bold ph-sun text-sm hidden dark:block"></i></button>
+<button id="miniPlayerBtn" style="-webkit-app-region: no-drag;" class="text-slate-400 hover:text-sky-500 transition flex items-center justify-center w-8 h-8 rounded hover:bg-slate-100 dark:hover:bg-slate-700" title="Mini Player"><i class="ph-bold ph-picture-in-picture text-sm"></i></button>
+<button id="minBtn" style="-webkit-app-region: no-drag;" class="text-slate-400 hover:text-slate-700 dark:hover:text-white transition flex items-center justify-center w-8 h-8 rounded hover:bg-slate-100 dark:hover:bg-slate-700"><i class="ph-bold ph-minus text-sm"></i></button>
+<button id="maxBtn" style="-webkit-app-region: no-drag;" class="text-slate-400 hover:text-sky-500 transition flex items-center justify-center w-8 h-8 rounded hover:bg-slate-100 dark:hover:bg-slate-700"><i class="ph-bold ph-square text-sm"></i></button>
+<button id="closeBtn" style="-webkit-app-region: no-drag;" class="text-slate-400 hover:text-red-500 transition flex items-center justify-center w-8 h-8 rounded hover:bg-red-50 dark:hover:bg-red-900/30"><i class="ph-bold ph-x text-sm"></i></button>
+</div>
+</div>
+
+<div class="flex flex-1 h-[calc(100vh-48px)]">
+<!-- Sidebar Navigation -->
+<nav class="w-20 flex flex-col items-center py-8 gap-8 z-10 border-r border-slate-100 dark:border-slate-700 bg-white/30 dark:bg-slate-800/30 backdrop-blur-sm">
+<button id="navPlayer" class="nav-item active flex flex-col items-center gap-1 p-2 relative text-slate-400 dark:text-slate-500 hover:text-sky-500 dark:hover:text-sky-400 transition-all duration-300 hover:scale-110" style="-webkit-app-region: no-drag;">
+<i class="ph-fill ph-disc text-2xl"></i>
+<div class="nav-indicator absolute -left-4 w-1 h-8 bg-sky-500 rounded-r-md transition-opacity opacity-100"></div>
+</button>
+<button id="navPlaylist" class="nav-item flex flex-col items-center gap-1 p-2 relative text-slate-400 dark:text-slate-500 hover:text-sky-500 dark:hover:text-sky-400 transition-all duration-300 hover:scale-110" style="-webkit-app-region: no-drag;">
+<i class="ph-fill ph-playlist text-2xl"></i>
+<div class="nav-indicator absolute -left-4 w-1 h-8 bg-sky-500 rounded-r-md transition-opacity opacity-0"></div>
+</button>
+<button id="navDownloader" class="nav-item flex flex-col items-center gap-1 p-2 relative text-slate-400 dark:text-slate-500 hover:text-sky-500 dark:hover:text-sky-400 transition-all duration-300 hover:scale-110" style="-webkit-app-region: no-drag;">
+<i class="ph-fill ph-cloud-arrow-down text-2xl"></i>
+<div class="nav-indicator absolute -left-4 w-1 h-8 bg-sky-500 rounded-r-md transition-opacity opacity-0"></div>
+</button>
+<button id="navSettings" class="nav-item flex flex-col items-center gap-1 p-2 relative text-slate-400 dark:text-slate-500 hover:text-sky-500 dark:hover:text-sky-400 transition-all duration-300 hover:scale-110" style="-webkit-app-region: no-drag;">
+<i class="ph-fill ph-sliders text-2xl"></i>
+<div class="nav-indicator absolute -left-4 w-1 h-8 bg-sky-500 rounded-r-md transition-opacity opacity-0"></div>
+</button>
+</nav>
+
+<main class="flex-1 relative overflow-hidden bg-white dark:bg-slate-800 rounded-tl-2xl shadow-[inset_0_20px_40px_-20px_rgba(0,0,0,0.03)] border-t border-l border-slate-100 dark:border-slate-700">
+
+<!-- TAB 1: Now Playing -->
+<div id="player" class="tab-content active flex-row h-full w-full relative">
+<canvas id="visualizerCanvas" class="absolute inset-0 w-full h-full pointer-events-none opacity-20 z-0"></canvas>
+
+<!-- Mini Queue -->
+<div id="miniQueueContainer" class="relative border-r border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex flex-col shadow-[inset_-10px_0_20px_-20px_rgba(0,0,0,0.05)] select-none" style="width: 256px; transition: width 0.3s ease;">
+<div id="miniQueueContent" class="flex-1 flex flex-col w-full p-4 overflow-hidden transition-opacity duration-200">
+<h3 class="font-bold text-slate-600 dark:text-slate-300 mb-4 flex items-center gap-2 text-xs uppercase tracking-wider"><i class="ph-bold ph-list-dashes text-sky-500"></i> Up Next</h3>
+<div id="miniQueueList" class="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5 pb-4">
+</div>
+</div>
+<!-- ปุ่ม Toggle พับ/ขยายคิว -->
+<button id="btnToggleQueue" class="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-12 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-full flex items-center justify-center shadow-md z-30 text-slate-400 dark:text-slate-300 hover:text-sky-500 transition select-none">
+<i id="toggleQueueIcon" class="ph-bold ph-caret-left pointer-events-none"></i>
+</button>
+</div>
+
+<!-- เครื่องเล่นหลัก -->
+<div class="flex-1 flex flex-col items-center justify-center relative p-8">
+
+<div class="relative w-64 h-64 mb-6 group transition-transform duration-500 hover:scale-105">
+<img id="albumCover" class="w-full h-full rounded-2xl object-cover hidden shadow-[0_20px_50px_-12px_rgba(0,0,0,0.2)] transition-all duration-500">
+<div id="defaultCover" class="w-full h-full rounded-2xl bg-gradient-to-tr from-slate-50 to-slate-100 dark:from-slate-700 dark:to-slate-600 flex items-center justify-center border border-slate-200 dark:border-slate-600 shadow-sm">
+<i class="ph-fill ph-music-note text-slate-300 dark:text-slate-500 text-6xl"></i>
+</div>
+</div>
+
+<div class="text-center w-3/4 max-w-md">
+<h2 id="fsTitle" class="text-2xl font-bold text-slate-800 dark:text-white truncate leading-snug">No track playing</h2>
+<p id="fsArtist" class="text-sm font-medium text-slate-400 dark:text-slate-400 mt-1">Ready to play</p>
+</div>
+
+<!-- พื้นที่ควบคุม Player ทั้งหมดแนวนอน -->
+<div class="w-full max-w-2xl mt-8 flex flex-col gap-4">
+
+<!-- Progress Bar พร้อม Tooltip Hover -->
+<div class="w-full flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400 font-medium font-mono relative">
+<span id="currentTimeText">00:00</span>
+<div class="flex-1 relative flex items-center h-4 group" id="progressContainer">
+  <input type="range" id="progressBar" min="0" max="100" value="0" class="w-full time-slider absolute z-10" disabled>
+</div>
+<div id="seekTooltip" class="hidden absolute -top-8 bg-slate-800 dark:bg-white text-white dark:text-slate-800 text-[10px] px-2 py-1 rounded shadow-md pointer-events-none z-20 transform -translate-x-1/2">00:00</div>
+<span id="totalTimeText">00:00</span>
+</div>
+
+<!-- แถวปุ่มควบคุม และ Volume -->
+<div class="w-full flex items-center justify-between px-2">
+
+<!-- ฝั่งซ้าย: Shuffle & Loop -->
+<div class="w-1/4 flex items-center gap-5 justify-start">
+<div class="relative group flex justify-center">
+<button id="btnShuffle" class="text-slate-400 hover:text-sky-500 transition transform hover:scale-110"><i class="ph-bold ph-shuffle text-xl"></i></button>
+<div class="tooltip">Shuffle</div>
+</div>
+<div class="relative group flex justify-center">
+<button id="btnLoop" class="text-slate-400 hover:text-sky-500 transition transform hover:scale-110"><i class="ph-bold ph-repeat text-xl"></i></button>
+<div class="tooltip">Loop</div>
+</div>
+</div>
+
+<!-- ตรงกลาง: Playback -->
+<div class="flex-1 flex items-center gap-6 justify-center">
+<div class="relative group flex justify-center">
+<button id="btnPrev" class="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition transform hover:-translate-x-1"><i class="ph-fill ph-skip-back text-3xl"></i></button>
+<div class="tooltip">Previous</div>
+</div>
+
+<div class="relative group flex justify-center">
+<button id="btnPlay" class="w-16 h-16 bg-gradient-to-tr from-slate-800 to-slate-700 dark:from-sky-500 dark:to-sky-400 text-white rounded-full flex items-center justify-center shadow-lg shadow-slate-300 dark:shadow-sky-900 hover:shadow-slate-400 dark:hover:shadow-sky-800 transition transform hover:scale-105">
+<i class="ph-fill ph-play text-2xl ml-1" id="fsPlayIcon"></i>
+</button>
+<div class="tooltip" id="playTooltip">Play</div>
+</div>
+
+<div class="relative group flex justify-center">
+<button id="btnNext" class="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition transform hover:translate-x-1"><i class="ph-fill ph-skip-forward text-3xl"></i></button>
+<div class="tooltip">Next</div>
+</div>
+</div>
+
+<!-- ฝั่งขวา: Auto-Next & Volume แนวนอน -->
+<div class="w-1/4 flex items-center gap-4 justify-end">
+<div class="relative group flex justify-center">
+<button id="btnAutoNext" class="text-sky-500 transition transform hover:scale-110"><i class="ph-bold ph-fast-forward text-xl"></i></button>
+<div class="tooltip" id="autoNextTooltip">Auto-Next: ON</div>
+</div>
+
+<div class="flex items-center gap-2 sm:gap-4 flex-shrink-0 w-24 sm:w-32 justify-end">
+<button id="btnMute" class="ctrl-btn text-slate-500 dark:text-slate-400 hover:text-sky-500 transition"><i id="muteIcon" class="ph-fill ph-speaker-high text-lg"></i></button>
+<input type="range" id="volSlider" min="0" max="100" value="100" class="w-20 sm:w-24 vol-slider-custom">
+</div>
+</div>
+
+</div>
+</div>
+</div>
+</div>
+
+<!-- TAB 2: Playlist -->
+<div id="playlist" class="tab-content flex-col h-full w-full p-10">
+<div class="flex justify-between items-end mb-4">
+<div>
+<h2 class="text-3xl font-bold text-slate-800 dark:text-white">Queue & Library</h2>
+<p class="text-slate-400 text-sm mt-1">Manage your music</p>
+</div>
+<div class="flex gap-2">
+<button id="btnAddFiles" class="bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-200 px-4 py-2 rounded-xl font-semibold hover:bg-slate-50 dark:hover:bg-slate-600 hover:text-sky-600 transition shadow-sm">
+<i class="ph-bold ph-file-plus"></i> Files
+</button>
+<button id="btnAddFolder" class="bg-sky-50 dark:bg-sky-900 border border-sky-100 dark:border-sky-800 text-sky-600 dark:text-sky-300 px-4 py-2 rounded-xl font-semibold hover:bg-sky-100 dark:hover:bg-sky-800 transition shadow-sm">
+<i class="ph-bold ph-folder-plus"></i> Folder
+</button>
+<button id="btnSavePl" class="bg-indigo-50 dark:bg-indigo-900 border border-indigo-100 dark:border-indigo-800 text-indigo-600 dark:text-indigo-300 px-4 py-2 rounded-xl font-semibold hover:bg-indigo-100 dark:hover:bg-indigo-800 transition shadow-sm">
+<i class="ph-bold ph-floppy-disk"></i> Save
+</button>
+<button id="btnClearPl" class="bg-red-50 dark:bg-red-900 border border-red-100 dark:border-red-800 text-red-600 dark:text-red-300 px-4 py-2 rounded-xl font-semibold hover:bg-red-100 dark:hover:bg-red-800 transition shadow-sm">
+<i class="ph-bold ph-trash"></i> Clear
+</button>
+</div>
+</div>
+
+<div class="flex items-center gap-4 mb-4">
+<div class="relative flex-1 max-w-sm">
+  <i class="ph-bold ph-magnifying-glass absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400"></i>
+  <input type="text" id="plSearch" placeholder="Search track or artist..." class="w-full bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg pl-9 pr-4 py-2 text-sm outline-none focus:border-sky-400 dark:text-white">
+</div>
+<div id="namedPlaylists" class="flex gap-2 overflow-x-auto pb-2 flex-1">
+  <!-- Named playlists will go here -->
+</div>
+</div>
+
+<div class="flex items-center justify-between mb-2 px-3">
+  <label class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 cursor-pointer">
+    <input type="checkbox" id="selectAll"> Select All
+  </label>
+  <button id="btnDeleteSelected" class="hidden text-xs bg-red-500 text-white px-3 py-1 rounded shadow hover:bg-red-600 transition">Delete Selected</button>
+</div>
+
+<div class="flex-1 overflow-y-auto pr-2 relative">
+<div id="trackList" class="flex flex-col gap-2 pb-4 min-h-full">
+<!-- Tracks -->
+</div>
+<div id="dropOverlay" class="hidden absolute inset-0 bg-sky-500/10 backdrop-blur-sm border-2 border-dashed border-sky-400 rounded-xl items-center justify-center flex-col text-sky-500 z-10">
+  <i class="ph-fill ph-download-simple text-4xl mb-2 animate-bounce"></i>
+  <span class="font-bold text-lg">Drop files here</span>
+</div>
+</div>
+</div>
+
+<!-- TAB 3: Downloader -->
+<div id="downloader" class="tab-content flex-col h-full w-full p-10">
+<div class="flex justify-between items-end mb-6">
+<div>
+<h2 class="text-3xl font-bold text-slate-800 dark:text-white mb-1">Downloader</h2>
+<p class="text-slate-400 text-sm">Download songs via yt-dlp</p>
+</div>
+<div class="flex flex-col items-end">
+<span class="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Download Path</span>
+<button id="btnChangePath" class="text-xs text-sky-500 hover:text-sky-600 font-mono truncate max-w-[200px] bg-sky-50 dark:bg-sky-900 px-2 py-1 rounded mt-1 border border-sky-100 dark:border-sky-800">Loading...</button>
+</div>
+</div>
+
+<div id="dlWarning" class="hidden bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 text-amber-700 dark:text-amber-400 p-3 rounded-xl mb-4 text-sm flex items-center gap-2">
+  <i class="ph-bold ph-warning"></i> Missing yt-dlp or ffmpeg in system path! Downloads may fail.
+</div>
+
+<div class="flex gap-3 mb-6 flex-wrap">
+<input type="text" id="dlInput" placeholder="Paste URL from YouTube, SoundCloud, or supported sites..." class="flex-1 min-w-[200px] bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl px-5 py-3 text-slate-700 dark:text-white text-sm outline-none focus:border-sky-400 transition">
+            <div class="grid grid-cols-2 gap-4">
+              <div class="relative">
+                <select id="dlFormat" class="w-full appearance-none bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl px-4 py-3 text-sm font-medium text-slate-700 dark:text-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 transition-all shadow-sm cursor-pointer hover:border-slate-300 dark:hover:border-slate-600">
+                  <option value="mp3">MP3 Audio</option>
+                  <option value="m4a">M4A (AAC)</option>
+                  <option value="wav">WAV Audio</option>
+                  <option value="flac">FLAC Audio</option>
+                </select>
+                <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-400">
+                  <i class="ph-bold ph-caret-down"></i>
+                </div>
+              </div>
+              
+              <div class="relative">
+                <select id="dlQuality" class="w-full appearance-none bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl px-4 py-3 text-sm font-medium text-slate-700 dark:text-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 transition-all shadow-sm cursor-pointer hover:border-slate-300 dark:hover:border-slate-600">
+                  <option value="320">320 kbps (Best)</option>
+                  <option value="192" selected>192 kbps (Good)</option>
+                  <option value="128">128 kbps (Basic)</option>
+                </select>
+                <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-400">
+                  <i class="ph-bold ph-caret-down"></i>
+                </div>
+              </div>
+            </div>
+<button id="btnDownload" class="bg-slate-800 dark:bg-sky-500 text-white px-8 rounded-xl font-semibold hover:bg-black dark:hover:bg-sky-600 transition flex items-center gap-2 shadow-md hover:-translate-y-0.5">
+<i class="ph-bold ph-download-simple text-lg"></i> Extract
+</button>
+</div>
+
+<div class="flex-1 bg-slate-50 dark:bg-slate-900 rounded-xl p-4 overflow-y-auto border border-slate-200 dark:border-slate-800 flex flex-col gap-2" id="dlQueue">
+<!-- Download items go here -->
+</div>
+</div>
+
+<!-- TAB 4: Settings (EQ) -->
+<div id="settings" class="tab-content flex-col h-full w-full p-10">
+<div class="flex justify-between items-end mb-6">
+<div>
+<h2 class="text-3xl font-bold text-slate-800 dark:text-white mb-1">Settings & EQ</h2>
+<p class="text-slate-400 text-sm">Equalizer and Audio Visualizer configuration</p>
+</div>
+</div>
+<div class="flex-1 bg-slate-50 dark:bg-slate-900 rounded-xl p-6 border border-slate-200 dark:border-slate-800 flex flex-col gap-6 overflow-y-auto">
+<div>
+<div class="flex items-center justify-between mb-4">
+  <h3 class="text-lg font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2"><i class="ph-bold ph-sliders-horizontal text-sky-500"></i> 10-Band Equalizer</h3>
+  <div class="flex gap-2 items-center">
+    <span class="text-sm text-slate-500 font-medium">Preset:</span>
+    <select id="eqPreset" class="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-700 dark:text-slate-200 outline-none focus:border-sky-500 cursor-pointer">
+      <option value="custom">Custom (ปรับเอง)</option>
+      <option value="flat">Flat (ปกติ)</option>
+      <option value="bass_boost">Bass Boost (เน้นเบส)</option>
+      <option value="acoustic">Acoustic (อคูสติก)</option>
+      <option value="classical">Classical (คลาสสิก)</option>
+      <option value="electronic">Electronic (อิเล็กทรอนิกส์)</option>
+      <option value="pop">Pop (ป็อป)</option>
+      <option value="rock">Rock (ร็อค)</option>
+      <option value="vocal">Vocal Booster (เน้นเสียงร้อง)</option>
+    </select>
+  </div>
+</div>
+<div class="flex items-end justify-between w-full h-48 px-4" id="eqContainer">
+<!-- EQ Sliders will be injected here -->
+</div>
+<div class="flex justify-between items-center mt-6">
+  <p class="text-xs text-slate-400 max-w-lg">
+    * คำอธิบายย่านเสียง:<br>
+    32Hz-125Hz: <span class="text-sky-500 font-medium">Sub Bass & Bass</span> (เสียงทุ้มลึก/กลองกระเดื่อง)<br>
+    250Hz-1KHz: <span class="text-sky-500 font-medium">Midrange</span> (เสียงร้อง/กีตาร์)<br>
+    2KHz-16KHz: <span class="text-sky-500 font-medium">Treble & Air</span> (เสียงแหลม/ฉาบ/ความใส)
+  </p>
+  <button id="btnResetEQ" class="bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-4 py-2 rounded text-sm hover:bg-slate-300 dark:hover:bg-slate-600 transition shadow-sm font-semibold">Reset EQ</button>
+</div>
+</div>
+</div>
+</div>
+
+</main>
+</div>
+</div>
+
+<!-- Mini Player UI (Hidden by default) -->
+<div id="miniPlayerApp" class="hidden h-full w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl flex items-center p-3 gap-3 shadow-2xl transition-all" style="-webkit-app-region: drag;">
+  <div class="w-16 h-16 flex-shrink-0 bg-slate-100 dark:bg-slate-800 rounded-lg overflow-hidden shadow-md flex items-center justify-center">
+    <img id="miniCover" class="w-full h-full object-cover hidden">
+    <i id="miniDefaultCover" class="ph-fill ph-music-note text-2xl text-slate-400"></i>
+  </div>
+  
+  <div class="flex-1 flex flex-col justify-center min-w-0">
+    <h2 id="miniTitle" class="text-sm font-bold text-slate-800 dark:text-white truncate">No track playing</h2>
+    <p id="miniArtist" class="text-xs font-medium text-slate-500 dark:text-slate-400 truncate mt-0.5">Ready to play</p>
+  </div>
+  
+  <div class="flex items-center gap-3 no-drag pr-2">
+    <button id="miniBtnPrev" class="text-slate-400 hover:text-sky-500 transition"><i class="ph-fill ph-skip-back text-xl"></i></button>
+    <button id="miniBtnPlay" class="w-10 h-10 bg-sky-500 text-white rounded-full flex items-center justify-center shadow hover:bg-sky-600 transition hover:scale-105"><i id="miniPlayIcon" class="ph-fill ph-play text-lg ml-0.5"></i></button>
+    <button id="miniBtnNext" class="text-slate-400 hover:text-sky-500 transition"><i class="ph-fill ph-skip-forward text-xl"></i></button>
+    
+    <div class="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1"></div>
+    
+    <button id="miniBtnRestore" class="text-slate-400 hover:text-slate-700 dark:hover:text-white transition" title="Restore Window"><i class="ph-bold ph-arrows-out-simple text-lg"></i></button>
+    <button id="miniBtnClose" class="text-slate-400 hover:text-red-500 transition" title="Close"><i class="ph-bold ph-x text-lg"></i></button>
+  </div>
+</div>
+
+<script src="renderer.js"></script>
+</body>
+</html>
