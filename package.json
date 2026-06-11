@@ -1,0 +1,55 @@
+{
+  "name": "nexus-audio",
+  "version": "2.0.1",
+  "description": "Nexus Audio - Modern music player & downloader",
+  "main": "app.js",
+  "author": "Punyapat",
+  "license": "MIT",
+  "homepage": "https://github.com/punyapat/nexus-audio",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "build": "electron-builder --linux",
+    "build:deb": "electron-builder --linux deb",
+    "build:appimage": "electron-builder --linux AppImage"
+  },
+  "build": {
+    "appId": "com.nexus.audio",
+    "productName": "Nexus Audio",
+    "linux": {
+      "target": [
+        "deb",
+        "AppImage",
+        "pacman"
+      ],
+      "icon": "icon.png",
+      "category": "Audio",
+      "maintainer": "Punyapat",
+      "synopsis": "Modern music player & downloader"
+    },
+    "files": [
+      "app.js",
+      "preload.js",
+      "index.html",
+      "styles.css",
+      "tailwind-built.css",
+      "phosphor-local.js",
+      "fonts/**/*",
+      "renderer.js",
+      "icon.png",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    }
+  },
+  "dependencies": {
+    "@phosphor-icons/web": "^2.1.2",
+    "music-metadata": "^7.14.0"
+  },
+  "devDependencies": {
+    "electron": "^42.4.0",
+    "electron-builder": "^25.1.8",
+    "tailwindcss": "^3.4.19"
+  }
+}
