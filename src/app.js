@@ -1,6 +1,9 @@
+// ============================================================================
 // Nexus Audio — Electron Main Process
-// Main process for Nexus Audio app: music player & downloader
-// Supports: window management, tray, media keys, download (yt-dlp), metadata
+// ============================================================================
+// Main process สำหรับแอป Nexus Audio: music player & downloader
+// รองรับ: window management, tray, media keys, download (yt-dlp), metadata
+// ============================================================================
 
 const {
   app,
@@ -11,10 +14,13 @@ const {
   Tray,
   Notification,
   nativeImage,
+  globalShortcut,
+  protocol,
   net,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const url = require('url');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const mm = require('music-metadata');
@@ -22,7 +28,22 @@ const mm = require('music-metadata');
 // Disable Wayland color manager to prevent error logs on Linux/Wayland (e.g. CachyOS)
 app.commandLine.appendSwitch('disable-features', 'WaylandWpColorManagerV1');
 
+// BUG-001 fix: Register custom protocol for safe local file access
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'nexus-local',
+  privileges: {
+    standard: true,
+    secure: true,
+    supportFetchAPI: true,
+    stream: true,
+    bypassCSP: true,
+    corsEnabled: true,
+  }
+}]);
+
+// ============================================================================
 // Constants & Paths
+// ============================================================================
 
 const ICON_PATH = path.join(__dirname, '../assets/icon.png');
 const AUDIO_EXTENSIONS = [
@@ -33,17 +54,28 @@ const AUDIO_FILTER = {
   extensions: ['mp3', 'wav', 'flac', 'm4a', 'ogg', 'wma', 'aac', 'opus', 'webm'],
 };
 
+// ============================================================================
 // Global State
+// ============================================================================
 
 let win = null;
 let tray = null;
 let config = {};
 let isMiniplayer = false;
-let previousBounds = null;   // Store bounds before entering mini player
-let saveBoundsTimer = null;  // Debounce timer for saving window bounds
-let currentDlPath = '';      // Current download path
+let previousBounds = null;   // เก็บ bounds ก่อนเข้า mini player
+let saveBoundsTimer = null;  // debounce timer สำหรับ save window bounds
+let currentDlPath = '';      // download path ปัจจุบัน
+let isDownloading = false;   // guard flag to prevent concurrent download batches (B7)
 
+// B13: Whitelist of allowed config keys for cfg:set
+const ALLOWED_CONFIG_KEYS = ['theme', 'dlPath', 'volume', 'lastFolder', 'windowBounds', 'eqGains', 'eqPresetName', 'userEqPresets', 'autoNext'];
+
+// I10: Maximum number of cached cover images before eviction
+const COVER_CACHE_LIMIT = 500;
+
+// ============================================================================
 // Config Management
+// ============================================================================
 
 function getConfigPath() {
   return path.join(app.getPath('userData'), 'nexus_config.json');
@@ -54,28 +86,30 @@ function loadConfig() {
     const raw = fs.readFileSync(getConfigPath(), 'utf-8');
     config = JSON.parse(raw);
   } catch {
-    // No config file or unable to read — using defaults
+    // ไม่มีไฟล์ config หรืออ่านไม่ได้ — ใช้ค่า default
     config = {};
   }
-  // Set default download path to ~/Music if none exists
+  // ตั้ง download path default เป็น ~/Music ถ้าไม่มี
   if (!config.dlPath) {
     config.dlPath = path.join(app.getPath('music') || app.getPath('home'), 'NexusAudio');
   }
   currentDlPath = config.dlPath;
 }
 
-function saveConfig(data) {
+async function saveConfig(data) {
   if (data) Object.assign(config, data);
   try {
-    fs.writeFileSync(getConfigPath(), JSON.stringify(config, null, 2), 'utf-8');
+    await fs.promises.writeFile(getConfigPath(), JSON.stringify(config, null, 2), 'utf-8');
   } catch (err) {
     console.error('[Config] Save error:', err.message);
   }
 }
 
+// ============================================================================
 // Helpers
+// ============================================================================
 
-/** Recursively find all audio files in directory (Asynchronous) */
+/** ค้นหาไฟล์เสียงทั้งหมดใน directory แบบ recursive (Asynchronous) */
 async function findAudioFiles(dir) {
   try {
     const entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -95,12 +129,18 @@ async function findAudioFiles(dir) {
   }
 }
 
-/** Sanitize text for log output — escape HTML characters */
+/**
+ * Sanitize text สำหรับ log output.
+ * IPC log messages are displayed via textContent in the renderer,
+ * so HTML escaping is unnecessary and would show literal &amp; etc.
+ * Instead, strip control characters that could cause display issues.
+ */
 function sanitize(text) {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
 }
 
-/** Extract metadata from audio file — return object for renderer */
+/** Extract metadata จากไฟล์เสียง — return object สำหรับ renderer */
 async function extractMetadata(filePath) {
   try {
     const metadata = await mm.parseFile(filePath);
@@ -116,8 +156,28 @@ async function extractMetadata(filePath) {
       
       if (!fs.existsSync(coverPath)) {
         await fs.promises.writeFile(coverPath, pic.data);
+
+        // I10: Evict oldest cover images if cache exceeds limit
+        try {
+          const allCovers = await fs.promises.readdir(coversDir);
+          if (allCovers.length > COVER_CACHE_LIMIT) {
+            const stats = await Promise.all(
+              allCovers.map(async (f) => {
+                const fp = path.join(coversDir, f);
+                const st = await fs.promises.stat(fp);
+                return { path: fp, mtimeMs: st.mtimeMs };
+              })
+            );
+            stats.sort((a, b) => a.mtimeMs - b.mtimeMs);
+            const toDelete = stats.slice(0, stats.length - COVER_CACHE_LIMIT);
+            await Promise.all(toDelete.map((f) => fs.promises.unlink(f.path).catch(() => {})));
+          }
+        } catch (evictErr) {
+          console.error('[Covers] Cache eviction error:', evictErr.message);
+        }
       }
-      coverUrl = `file://${coverPath}`;
+      // B15: Properly encode file path to URL
+      coverUrl = url.pathToFileURL(coverPath).href;
     }
 
     return {
@@ -139,10 +199,12 @@ async function extractMetadata(filePath) {
   }
 }
 
+// ============================================================================
 // Window Creation
+// ============================================================================
 
 function createWindow() {
-  // Retrieve bounds from config (remember window position/size)
+  // ดึง bounds จาก config (จำตำแหน่ง/ขนาดหน้าต่าง)
   const bounds = config.windowBounds || {};
 
   win = new BrowserWindow({
@@ -161,7 +223,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, 'preload.js'),
-      webSecurity: false, // Required for file:// audio playback
+      webSecurity: true,
     },
   });
 
@@ -181,25 +243,25 @@ function createWindow() {
     }
   });
 
-  // Window Events
+  // ---------- Window Events ----------
 
-  // Close window → hide to tray instead of quitting (if tray exists)
+  // ปิดหน้าต่าง → ซ่อนไปที่ tray แทนการ quit (ถ้ามี tray)
   win.on('close', (e) => {
     if (tray && !app.isQuitting) {
       e.preventDefault();
       win.hide();
-      win.webContents.send('media:pause'); // Pause music when hiding app to tray
+      win.webContents.send('media:pause'); // หยุดเพลงเมื่อปิดแอปไปที่ tray
     }
   });
 
-  // Save bounds on resize/move (debounce 500ms)
+  // Save bounds เมื่อ resize/move (debounce 500ms)
   const saveBounds = () => {
-    if (isMiniplayer) return; // Do not save bounds in mini player mode
+    if (isMiniplayer) return; // ไม่บันทึก bounds ตอนอยู่ใน mini mode
     clearTimeout(saveBoundsTimer);
-    saveBoundsTimer = setTimeout(() => {
+    saveBoundsTimer = setTimeout(async () => {
       if (win && !win.isDestroyed()) {
         config.windowBounds = win.getBounds();
-        saveConfig();
+        await saveConfig();
       }
     }, 500);
   };
@@ -208,7 +270,9 @@ function createWindow() {
   win.on('move', saveBounds);
 }
 
+// ============================================================================
 // System Tray (F21)
+// ============================================================================
 
 function createTray() {
   try {
@@ -219,7 +283,7 @@ function createTray() {
     tray.setToolTip('Nexus Audio');
     buildTrayMenu('Not Playing', false);
 
-    // Click tray icon → show/focus window
+    // คลิก tray icon → แสดง/focus หน้าต่าง
     tray.on('click', () => {
       if (win) {
         win.show();
@@ -267,9 +331,32 @@ function buildTrayMenu(title, isPlaying) {
   tray.setToolTip(title || 'Nexus Audio');
 }
 
+// ============================================================================
+// Media Keys (F22)
+// ============================================================================
 
+function registerMediaKeys() {
+  const keys = [
+    { key: 'MediaPlayPause', channel: 'media:play-pause' },
+    { key: 'MediaNextTrack', channel: 'media:next' },
+    { key: 'MediaPreviousTrack', channel: 'media:prev' },
+  ];
 
+  for (const { key, channel } of keys) {
+    try {
+      globalShortcut.register(key, () => {
+        win?.webContents.send(channel);
+      });
+    } catch (err) {
+      // บาง key อาจ register ไม่ได้ในบาง platform
+      console.error(`[MediaKey] Failed to register ${key}:`, err.message);
+    }
+  }
+}
+
+// ============================================================================
 // IPC Handlers — Window
+// ============================================================================
 
 function setupWindowIPC() {
   ipcMain.on('win:minimize', () => {
@@ -289,7 +376,7 @@ function setupWindowIPC() {
     if (!win) return;
     if (tray) {
       win.hide();
-      win.webContents.send('media:pause'); // Pause music when hiding app to tray
+      win.webContents.send('media:pause'); // หยุดเพลงเมื่อปิดแอปไปที่ tray
     } else {
       app.isQuitting = true;
       app.quit();
@@ -300,16 +387,16 @@ function setupWindowIPC() {
     if (!win) return;
 
     if (isMiniplayer) {
-      // Return to normal mode
+      // กลับสู่โหมดปกติ
       isMiniplayer = false;
       if (previousBounds) {
         win.setBounds(previousBounds);
       }
       win.setAlwaysOnTop(false);
       win.setSkipTaskbar(false);
-      win.setMinimumSize(700, 450);
+      win.setMinimumSize(850, 450);
     } else {
-      // Enter mini player mode
+      // เข้า mini player mode
       previousBounds = win.getBounds();
       isMiniplayer = true;
       win.setMinimumSize(300, 80);
@@ -321,7 +408,9 @@ function setupWindowIPC() {
   });
 }
 
+// ============================================================================
 // IPC Handlers — Dialogs
+// ============================================================================
 
 function setupDialogIPC() {
   ipcMain.handle('dlg:open-files', async () => {
@@ -353,7 +442,9 @@ function setupDialogIPC() {
   });
 }
 
+// ============================================================================
 // IPC Handlers — Player
+// ============================================================================
 
 function setupPlayerIPC() {
   ipcMain.handle('player:metadata', async (_event, filePath) => {
@@ -363,7 +454,15 @@ function setupPlayerIPC() {
   ipcMain.on('player:notify', (_event, { title, artist, cover }) => {
     try {
       if (Notification.isSupported()) {
-        const iconImage = cover ? nativeImage.createFromDataURL(cover) : ICON_PATH;
+        let iconImage = ICON_PATH;
+        if (cover) {
+          if (cover.startsWith('data:')) {
+            iconImage = nativeImage.createFromDataURL(cover);
+          } else if (cover.startsWith('file://')) {
+            const coverPath = url.fileURLToPath(cover);
+            iconImage = nativeImage.createFromPath(coverPath);
+          }
+        }
         const notif = new Notification({
           title: title || 'Nexus Audio',
           body: artist || 'Unknown Artist',
@@ -378,13 +477,15 @@ function setupPlayerIPC() {
   });
 }
 
+// ============================================================================
 // IPC Handlers — Playlist
+// ============================================================================
 
 function setupPlaylistIPC() {
   const stateFile = () => path.join(app.getPath('userData'), 'playlist_state.json');
   const playlistsDir = () => path.join(app.getPath('userData'), 'playlists');
 
-  // Save playlist state (latest — tracks, position, etc.)
+  // Save playlist state (ล่าสุด — tracks, position, etc.)
   ipcMain.on('pl:save-state', async (_event, data) => {
     try {
       await fs.promises.writeFile(stateFile(), JSON.stringify(data), 'utf-8');
@@ -406,11 +507,14 @@ function setupPlaylistIPC() {
   // Save named playlist
   ipcMain.handle('pl:save-named', async (_event, name, tracks) => {
     try {
+      // B6: Sanitize playlist name to prevent path traversal
+      const safeName = path.basename(String(name)).replace(/[\/\\]/g, '').replace(/\.\./g, '');
+      if (!safeName) return false;
       const dir = playlistsDir();
       if (!fs.existsSync(dir)) {
         await fs.promises.mkdir(dir, { recursive: true });
       }
-      const filePath = path.join(dir, name + '.json');
+      const filePath = path.join(dir, safeName + '.json');
       await fs.promises.writeFile(filePath, JSON.stringify(tracks), 'utf-8');
       return true;
     } catch (err) {
@@ -449,7 +553,10 @@ function setupPlaylistIPC() {
   // Load named playlist
   ipcMain.handle('pl:load-named', async (_event, name) => {
     try {
-      const filePath = path.join(playlistsDir(), name + '.json');
+      // B6: Sanitize playlist name to prevent path traversal
+      const safeName = path.basename(String(name)).replace(/[\/\\]/g, '').replace(/\.\./g, '');
+      if (!safeName) return null;
+      const filePath = path.join(playlistsDir(), safeName + '.json');
       const raw = await fs.promises.readFile(filePath, 'utf-8');
       return JSON.parse(raw);
     } catch (err) {
@@ -461,7 +568,10 @@ function setupPlaylistIPC() {
   // Delete named playlist
   ipcMain.handle('pl:delete-named', async (_event, name) => {
     try {
-      const filePath = path.join(playlistsDir(), name + '.json');
+      // B6: Sanitize playlist name to prevent path traversal
+      const safeName = path.basename(String(name)).replace(/[\/\\]/g, '').replace(/\.\./g, '');
+      if (!safeName) return false;
+      const filePath = path.join(playlistsDir(), safeName + '.json');
       await fs.promises.unlink(filePath);
       return true;
     } catch (err) {
@@ -471,7 +581,9 @@ function setupPlaylistIPC() {
   });
 }
 
+// ============================================================================
 // IPC Handlers — Download
+// ============================================================================
 
 const activeDownloads = new Map();
 
@@ -481,7 +593,7 @@ function setupDownloadIPC() {
     return currentDlPath;
   });
 
-  // Change download path via folder picker
+  // Change download path ผ่าน folder picker
   ipcMain.handle('dl:change-path', async () => {
     try {
       const result = await dialog.showOpenDialog(win, {
@@ -492,7 +604,7 @@ function setupDownloadIPC() {
       if (result.canceled || !result.filePaths.length) return null;
       currentDlPath = result.filePaths[0];
       config.dlPath = currentDlPath;
-      saveConfig();
+      await saveConfig();
       return currentDlPath;
     } catch (err) {
       console.error('[Download] change-path error:', err.message);
@@ -500,57 +612,17 @@ function setupDownloadIPC() {
     }
   });
 
-  // Auto-download yt-dlp function
-  async function ensureYtDlp() {
-    const binDir = path.join(app.getPath('userData'), 'bin');
-    if (!fs.existsSync(binDir)) fs.mkdirSync(binDir, { recursive: true });
-    
-    let ytdlpName = 'yt-dlp';
-    if (process.platform === 'win32') ytdlpName = 'yt-dlp.exe';
-    else if (process.platform === 'darwin') ytdlpName = 'yt-dlp_macos';
-    
-    const ytdlpPath = path.join(binDir, ytdlpName);
-    if (fs.existsSync(ytdlpPath)) return ytdlpPath;
-
-    win?.webContents.send('dl:log', '[System] Downloading yt-dlp binary for the first time... Please wait.');
-    const url = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${ytdlpName}`;
-    
-    return new Promise((resolve) => {
-      const request = net.request(url);
-      request.on('response', (response) => {
-        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-          // Follow redirect manually if needed, but net.request usually handles it.
-          // Just in case, let's follow the first redirect explicitly if net.request doesn't.
-        }
-        if (response.statusCode !== 200 && response.statusCode !== 302) {
-          win?.webContents.send('dl:log', `[Error] Failed to download yt-dlp: HTTP ${response.statusCode}`);
-          return resolve(null);
-        }
-        const file = fs.createWriteStream(ytdlpPath);
-        response.on('data', (chunk) => file.write(chunk));
-        response.on('end', () => {
-          file.end();
-          if (process.platform !== 'win32') fs.chmodSync(ytdlpPath, '755');
-          win?.webContents.send('dl:log', '[System] yt-dlp downloaded successfully!');
-          resolve(ytdlpPath);
-        });
-      });
-      request.on('error', (err) => {
-        win?.webContents.send('dl:log', `[Error] ${err.message}`);
-        resolve(null);
-      });
-      request.end();
-    });
-  }
-
+  // Check if yt-dlp and ffmpeg are available in PATH
   ipcMain.handle('dl:check-deps', async () => {
-    win?.webContents.send('dl:log', '[System] Checking dependencies...');
-    const ytdlpPath = await ensureYtDlp();
-    let ffmpegPath = require('ffmpeg-static');
-    if (ffmpegPath && ffmpegPath.includes('app.asar')) {
-      ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
-    }
-    return { ytdlp: !!ytdlpPath, ffmpeg: !!ffmpegPath };
+    const check = (cmd) =>
+      new Promise((resolve) => {
+        const proc = spawn('which', [cmd]);
+        proc.on('close', (code) => resolve(code === 0));
+        proc.on('error', () => resolve(false));
+      });
+
+    const [ytdlp, ffmpeg] = await Promise.all([check('yt-dlp'), check('ffmpeg')]);
+    return { ytdlp, ffmpeg };
   });
 
   ipcMain.on('dl:cancel', (_event, url) => {
@@ -561,33 +633,73 @@ function setupDownloadIPC() {
     }
   });
 
-  // Start download — use spawn() to avoid command injection
+  // Start download — ใช้ spawn() เพื่อหลีกเลี่ยง command injection
   ipcMain.on('dl:start', async (_event, { urls, format, quality }) => {
     if (!Array.isArray(urls) || urls.length === 0) return;
 
+    // B7: Prevent concurrent download batches
+    if (isDownloading) {
+      win?.webContents.send('dl:error', { url: urls[0], message: 'A download batch is already in progress. Please wait.' });
+      return;
+    }
+    isDownloading = true;
+
+    // B12: Validate all URLs before starting
+    const validUrls = [];
+    for (const u of urls) {
+      const trimmed = String(u).trim();
+      if (!trimmed) {
+        win?.webContents.send('dl:error', { url: u, message: 'Empty URL' });
+        continue;
+      }
+      if (trimmed.startsWith('--')) {
+        win?.webContents.send('dl:error', { url: u, message: 'Invalid URL: flag injection attempt' });
+        continue;
+      }
+      if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+        win?.webContents.send('dl:error', { url: u, message: 'Invalid URL: must start with http:// or https://' });
+        continue;
+      }
+      validUrls.push(trimmed);
+    }
+
+    if (validUrls.length === 0) {
+      isDownloading = false;
+      win?.webContents.send('dl:complete');
+      return;
+    }
+
+    // B14: If mkdir fails, report error for all URLs and return early
     try {
       if (!fs.existsSync(currentDlPath)) {
         await fs.promises.mkdir(currentDlPath, { recursive: true });
       }
     } catch (err) {
       console.error('[Download] Cannot create directory:', err.message);
+      for (const u of validUrls) {
+        win?.webContents.send('dl:error', { url: u, message: `Cannot create download directory: ${err.message}` });
+      }
+      isDownloading = false;
+      win?.webContents.send('dl:complete');
+      return;
     }
 
     const CONCURRENCY_LIMIT = 3;
     let activeCount = 0;
     let index = 0;
 
-    return new Promise((resolve) => {
+    new Promise((resolve) => {
       function next() {
-        if (index >= urls.length && activeCount === 0) {
+        if (index >= validUrls.length && activeCount === 0) {
+          isDownloading = false;
           win?.webContents.send('dl:complete');
           resolve();
           return;
         }
-        while (activeCount < CONCURRENCY_LIMIT && index < urls.length) {
-          const url = urls[index++];
+        while (activeCount < CONCURRENCY_LIMIT && index < validUrls.length) {
+          const dlUrl = validUrls[index++];
           activeCount++;
-          downloadSingleURL(url, format, quality).then(() => {
+          downloadSingleURL(dlUrl, format, quality).then(() => {
             activeCount--;
             next();
           });
@@ -599,32 +711,14 @@ function setupDownloadIPC() {
 }
 
 /**
- * Download a single file from URL via yt-dlp (spawn)
- * - Use --print after_move:filepath to capture the downloaded file path
- * - Parse progress from stdout
- * - Send events back to renderer
+ * ดาวน์โหลดไฟล์จาก URL เดียว ผ่าน yt-dlp (spawn)
+ * - ใช้ --print after_move:filepath เพื่อจับ path ของไฟล์ที่ดาวน์โหลดเสร็จ
+ * - Parse progress จาก stdout
+ * - ส่ง events กลับไปที่ renderer
  */
 function downloadSingleURL(url, format, quality) {
-  return new Promise(async (resolve) => {
-    // Get current path for yt-dlp and ffmpeg
-    const binDir = path.join(app.getPath('userData'), 'bin');
-    let ytdlpName = 'yt-dlp';
-    if (process.platform === 'win32') ytdlpName = 'yt-dlp.exe';
-    else if (process.platform === 'darwin') ytdlpName = 'yt-dlp_macos';
-    const ytdlpPath = path.join(binDir, ytdlpName);
-
-    let ffmpegPath = require('ffmpeg-static');
-    if (ffmpegPath && ffmpegPath.includes('app.asar')) {
-      ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
-    }
-
-    if (!fs.existsSync(ytdlpPath)) {
-      win?.webContents.send('dl:log', '[Error] yt-dlp binary is missing.');
-      return resolve();
-    }
-
+  return new Promise((resolve) => {
     const args = [
-      '--ffmpeg-location', ffmpegPath,
       '-x',
       '--audio-format', format || 'mp3',
       '--embed-thumbnail',
@@ -634,13 +728,13 @@ function downloadSingleURL(url, format, quality) {
       url,
     ];
 
-    // Add audio quality for mp3/m4a
+    // เพิ่ม audio quality สำหรับ mp3/m4a
     if ((format === 'mp3' || format === 'm4a') && quality) {
       args.splice(args.indexOf('--newline') + 1, 0, '--audio-quality', quality + 'k');
     }
 
     let outputFilePath = null;
-    const proc = spawn(ytdlpPath, args);
+    const proc = spawn('yt-dlp', args);
     activeDownloads.set(url, proc);
 
     proc.stdout.on('data', (data) => {
@@ -648,7 +742,7 @@ function downloadSingleURL(url, format, quality) {
       for (const line of lines) {
         if (!line.trim()) continue;
 
-        // Send every log line to renderer
+        // ส่ง log ทุกบรรทัดไปที่ renderer
         win?.webContents.send('dl:log', sanitize(line));
 
         // Parse progress: [download]   0.4% of  246.27KiB at  Unknown B/s ETA Unknown
@@ -713,20 +807,25 @@ function downloadSingleURL(url, format, quality) {
           win?.webContents.send('dl:success', { url, filePath: outputFilePath, metadata: null });
         }
       } else {
-        win?.webContents.send('dl:error', { url });
+        win?.webContents.send('dl:error', { url, message: `Download failed with exit code ${code}` });
       }
       resolve();
     });
 
     proc.on('error', (err) => {
       console.error('[Download] spawn error:', err.message);
+      // B8: Send dl:error event and clean up activeDownloads on spawn error
       win?.webContents.send('dl:log', `[Error] ${sanitize(err.message)}`);
+      win?.webContents.send('dl:error', { url, message: `Spawn error: ${err.message}` });
+      activeDownloads.delete(url);
       resolve();
     });
   });
 }
 
+// ============================================================================
 // IPC Handlers — Config
+// ============================================================================
 
 function setupConfigIPC() {
   ipcMain.handle('cfg:get', async (_event, key) => {
@@ -737,17 +836,24 @@ function setupConfigIPC() {
     }
   });
 
-  ipcMain.on('cfg:set', (_event, key, value) => {
+  ipcMain.on('cfg:set', async (_event, key, value) => {
     try {
+      // B13: Only allow whitelisted config keys
+      if (!ALLOWED_CONFIG_KEYS.includes(key)) {
+        console.warn(`[Config] Blocked setting non-whitelisted key: ${key}`);
+        return;
+      }
       config[key] = value;
-      saveConfig();
+      await saveConfig();
     } catch (err) {
       console.error('[Config] set error:', err.message);
     }
   });
 }
 
+// ============================================================================
 // IPC Handlers — Context Menu
+// ============================================================================
 
 function setupContextMenuIPC() {
   ipcMain.on('ctx:menu', () => {
@@ -762,7 +868,9 @@ function setupContextMenuIPC() {
   });
 }
 
+// ============================================================================
 // IPC Handlers — Tray Update
+// ============================================================================
 
 function setupTrayIPC() {
   ipcMain.on('tray:update', (_event, { title, isPlaying }) => {
@@ -770,15 +878,17 @@ function setupTrayIPC() {
   });
 }
 
+// ============================================================================
 // App Lifecycle
+// ============================================================================
 
-// Prevent multiple instances
+// ป้องกัน multiple instances
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    // When user opens 2nd instance → show the 1st instance's window
+    // เมื่อ user เปิด instance ที่ 2 → แสดงหน้าต่างของ instance แรก
     if (win) {
       if (win.isMinimized()) win.restore();
       win.show();
@@ -788,18 +898,78 @@ if (!gotTheLock) {
 }
 
 app.whenReady().then(() => {
-  // Load config before creating window
+  protocol.handle('nexus-local', async (request) => {
+    const rawUrl = request.url;
+    let filePath = decodeURIComponent(rawUrl.slice('nexus-local://'.length));
+    if (!/^[a-zA-Z]:/.test(filePath) && !filePath.startsWith('/')) {
+      filePath = '/' + filePath;
+    }
+    
+    try {
+      const stat = fs.statSync(filePath);
+      const fileSize = stat.size;
+      const rangeHeader = request.headers.get('Range');
+      
+      let start = 0;
+      let end = fileSize - 1;
+      let statusCode = 200;
+      const headers = new Headers();
+      headers.set('Access-Control-Allow-Origin', '*');
+      headers.set('Accept-Ranges', 'bytes');
+      
+      if (rangeHeader) {
+        const parts = rangeHeader.replace(/bytes=/, "").split("-");
+        const partialStart = parts[0];
+        const partialEnd = parts[1];
+        
+        start = parseInt(partialStart, 10);
+        end = partialEnd ? parseInt(partialEnd, 10) : fileSize - 1;
+        
+        statusCode = 206;
+        headers.set('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+      }
+      
+      headers.set('Content-Length', (end - start + 1).toString());
+      const ext = path.extname(filePath).toLowerCase();
+      const mimeTypes = {
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav',
+        '.flac': 'audio/flac',
+        '.ogg': 'audio/ogg',
+        '.m4a': 'audio/mp4',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+      };
+      headers.set('Content-Type', mimeTypes[ext] || 'application/octet-stream');
+      
+      const nodeStream = fs.createReadStream(filePath, { start, end });
+      const { Readable } = require('stream');
+      const webStream = Readable.toWeb(nodeStream);
+      
+      return new Response(webStream, {
+        status: statusCode,
+        headers: headers
+      });
+    } catch (e) {
+      console.error('[Protocol] Error reading file:', filePath, e);
+      return new Response('File not found', { status: 404 });
+    }
+  });
+
+  // โหลด config ก่อนสร้าง window
   loadConfig();
 
-  // Create main window
+  // สร้างหน้าต่างหลัก
   createWindow();
 
-  // Create system tray
+  // สร้าง system tray
   createTray();
 
+  // ลงทะเบียน media keys
+  registerMediaKeys();
 
-
-  // Setup all IPC handlers
+  // ตั้ง IPC handlers ทั้งหมด
   setupWindowIPC();
   setupDialogIPC();
   setupPlayerIPC();
@@ -810,7 +980,7 @@ app.whenReady().then(() => {
   setupTrayIPC();
 });
 
-// macOS: Create new window when dock icon is clicked if no window exists
+// macOS: สร้างหน้าต่างใหม่เมื่อคลิก dock icon ถ้าไม่มี window
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
@@ -819,16 +989,29 @@ app.on('activate', () => {
   }
 });
 
-// Quit app when all windows are closed (except macOS)
+// ปิดแอปเมื่อปิดหน้าต่างทั้งหมด (ยกเว้น macOS)
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
 });
 
+// Cleanup เมื่อ quit
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
 
+  // B17: Kill all active download processes on quit
+  for (const [dlUrl, proc] of activeDownloads) {
+    try {
+      proc.kill('SIGKILL');
+    } catch (err) {
+      console.error(`[Download] Failed to kill process for ${dlUrl}:`, err.message);
+    }
+  }
+  activeDownloads.clear();
+});
 
-// Catch flag for actual quit (not just hide)
+// จับ flag สำหรับ quit จริงๆ (ไม่ใช่แค่ hide)
 app.isQuitting = false;
 app.on('before-quit', () => {
   app.isQuitting = true;

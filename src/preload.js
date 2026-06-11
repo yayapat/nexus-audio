@@ -19,7 +19,10 @@ contextBridge.exposeInMainWorld('nexus', {
   openFolder: () => ipcRenderer.invoke('dlg:open-folder'),
 
   // Player — metadata extraction via music-metadata (replaces ffmpeg cover extraction)
-  extractMetadata: (fp) => ipcRenderer.invoke('player:metadata', fp),
+  extractMetadata: (fp) => {
+    if (typeof fp !== 'string' || !fp.trim()) throw new Error('extractMetadata: fp must be a non-empty string');
+    return ipcRenderer.invoke('player:metadata', fp);
+  },
   notifySongChange: (info) => ipcRenderer.send('player:notify', info),
   onMediaPlayPause: (fn) => on('media:play-pause', fn),
   onMediaPause: (fn) => on('media:pause', fn),
@@ -35,7 +38,10 @@ contextBridge.exposeInMainWorld('nexus', {
   deleteNamedPlaylist: (n) => ipcRenderer.invoke('pl:delete-named', n),
 
   // Download
-  dlStart: (o) => ipcRenderer.send('dl:start', o),
+  dlStart: (o) => {
+    if (!o || !Array.isArray(o.urls) || typeof o.format !== 'string') throw new Error('dlStart: o must have urls (array) and format (string)');
+    ipcRenderer.send('dl:start', o);
+  },
   dlGetPath: () => ipcRenderer.invoke('dl:get-path'),
   dlChangePath: () => ipcRenderer.invoke('dl:change-path'),
   dlCheckDeps: () => ipcRenderer.invoke('dl:check-deps'),
@@ -48,7 +54,10 @@ contextBridge.exposeInMainWorld('nexus', {
 
   // Config
   getConfig: (k) => ipcRenderer.invoke('cfg:get', k),
-  setConfig: (k, v) => ipcRenderer.send('cfg:set', k, v),
+  setConfig: (k, v) => {
+    if (typeof k !== 'string') throw new Error('setConfig: k must be a string');
+    ipcRenderer.send('cfg:set', k, v);
+  },
 
   // Context Menu
   showContextMenu: () => ipcRenderer.send('ctx:menu'),

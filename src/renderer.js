@@ -8,13 +8,19 @@ let isShuffle = false;
 let isLoop = false;
 let isAutoNext = true;
 let isDraggingSlider = false;
-let previousVolume = 1;
+
 let metadataCache = new Map();
 let theme = 'light';
 let downloadQueue = [];
 
 const audioPlayer = new Audio();
+audioPlayer.crossOrigin = "anonymous";
 const el = (id) => document.getElementById(id);
+
+/** BUG-001/BUG-005 fix: Convert local file path to safe nexus-local:// URL */
+function pathToSafeURL(filePath) {
+  return 'nexus-local://' + encodeURI(filePath).replace(/#/g, '%23').replace(/\?/g, '%3F');
+}
 
 // --- Context Menu ---
 window.addEventListener('contextmenu', (e) => {
@@ -23,26 +29,6 @@ window.addEventListener('contextmenu', (e) => {
     nx.showContextMenu();
   }
 });
-
-// --- Local Keyboard Shortcuts ---
-window.addEventListener('keydown', (e) => {
-  // Do not trigger if typing in a text input field
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-
-  if (e.code === 'Space') {
-    e.preventDefault();
-    el('btnPlay').click();
-  } else if (e.code === 'ArrowRight') {
-    if (audioPlayer.duration) {
-      audioPlayer.currentTime = Math.min(audioPlayer.duration, audioPlayer.currentTime + 5);
-    }
-  } else if (e.code === 'ArrowLeft') {
-    if (audioPlayer.duration) {
-      audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 5);
-    }
-  }
-});
-
 
 // --- Initialization ---
 async function init() {
@@ -66,7 +52,7 @@ async function init() {
       renderAllPlaylists();
       
       if (currentIdx >= 0 && currentIdx < playlist.length) {
-        audioPlayer.src = `file://${playlist[currentIdx].path}`;
+        audioPlayer.src = pathToSafeURL(playlist[currentIdx].path);
         loadTrackUI(currentIdx, false);
       } else {
         progBar.disabled = true;
@@ -84,6 +70,8 @@ async function init() {
               metadataCache.set(t.path, meta);
               clearTimeout(initRenderTimeout);
               initRenderTimeout = setTimeout(() => renderAllPlaylists(), 300);
+            }).catch(err => {
+              console.error('Failed to extract metadata for', t.path, err);
             });
           }
         }
@@ -98,6 +86,14 @@ async function init() {
     const deps = await nx.dlCheckDeps();
     if (!deps.ytdlp || !deps.ffmpeg) {
       el('dlWarning').classList.remove('hidden');
+    }
+
+    // Register MediaSession handlers once
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.setActionHandler('play', () => audioPlayer.play());
+      navigator.mediaSession.setActionHandler('pause', () => audioPlayer.pause());
+      navigator.mediaSession.setActionHandler('previoustrack', () => playPrev());
+      navigator.mediaSession.setActionHandler('nexttrack', () => playNext());
     }
   } catch (err) {
     console.error("Init Error:", err);
@@ -225,7 +221,7 @@ function formatTime(seconds) {
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
-const getFilename = (path) => path.split(/[/\\]/).pop().replace(/\.(mp3|wav|flac|m4a|ogg)$/i, '');
+const getFilename = (path) => path.split(/[/\\]/).pop().replace(/\.(mp3|wav|flac|m4a|ogg|wma|aac|opus|webm)$/i, '');
 const escapeHtml = (str) => {
   if (!str) return '';
   return str.toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
@@ -277,7 +273,7 @@ audioPlayer.addEventListener('error', (e) => {
 });
 
 function updatePlayPauseUI() {
-  el('fsPlayIcon').className = isPlaying ? 'ph-fill ph-pause text-2xl ml-1' : 'ph-fill ph-play text-2xl ml-1';
+  el('fsPlayIcon').className = isPlaying ? 'ph-fill ph-pause text-2xl' : 'ph-fill ph-play text-2xl ml-[2px]';
   el('playTooltip').innerText = isPlaying ? 'Pause' : 'Play';
   
   el('miniPlayIcon').className = isPlaying ? 'ph-fill ph-pause text-lg ml-0.5' : 'ph-fill ph-play text-lg ml-0.5';
@@ -288,9 +284,9 @@ function updatePlayPauseUI() {
 }
 
 function updateControlStateUI() {
-  el('btnShuffle').style.color = isShuffle ? '#0ea5e9' : '';
-  el('btnLoop').style.color = isLoop ? '#0ea5e9' : '';
-  el('btnAutoNext').style.color = isAutoNext ? '#0ea5e9' : '';
+  el('btnShuffle').style.color = isShuffle ? '#0ea5e9' : '#94a3b8';
+  el('btnLoop').style.color = isLoop ? '#0ea5e9' : '#94a3b8';
+  el('btnAutoNext').style.color = isAutoNext ? '#0ea5e9' : '#94a3b8';
   el('autoNextTooltip').innerText = `Auto-Next: ${isAutoNext ? 'ON' : 'OFF'}`;
 }
 
@@ -343,11 +339,7 @@ style.textContent = `
 document.head.appendChild(style);
 
 const volSlider = el('volSlider');
-volSlider.addEventListener('input', () => {
-  audioPlayer.volume = volSlider.value / 100;
-  volSlider.style.setProperty('--val', `${volSlider.value}%`);
-  updateVolIcon(audioPlayer.volume);
-});
+// Volume input listener is below in the Volume section
 
 // Update initial vol slider CSS var
 volSlider.style.setProperty('--val', `${volSlider.value}%`);
@@ -363,6 +355,9 @@ progBar.addEventListener('change', () => {
   if (audioPlayer.duration) audioPlayer.currentTime = (progBar.value / 100) * audioPlayer.duration;
   isDraggingSlider = false;
 });
+
+// Fallback: ensure isDraggingSlider resets even if mouseup happens outside the slider
+document.addEventListener('mouseup', () => { isDraggingSlider = false; });
 
 const progCont = el('progressContainer');
 const seekTooltip = el('seekTooltip');
@@ -412,23 +407,29 @@ el('btnAutoNext').onclick = () => { isAutoNext = !isAutoNext; updateControlState
 el('volSlider').addEventListener('input', (e) => {
   const vol = e.target.value / 100;
   audioPlayer.volume = vol;
-  if (vol > 0) previousVolume = vol;
-  updateVolIcon(vol);
-  requestSaveState();
-});
-
-el('btnMute').onclick = () => {
-  if (audioPlayer.volume > 0) {
-    previousVolume = audioPlayer.volume;
-    audioPlayer.volume = 0;
-    el('volSlider').value = 0;
+  volSlider.style.setProperty('--val', `${volSlider.value}%`);
+  
+  if (vol === 0) {
+    if (!isMuted) {
+      isMuted = true;
+      audioPlayer.muted = true;
+      el('btnMute').classList.remove('text-slate-500', 'dark:text-slate-400');
+      el('btnMute').classList.add('text-red-500', 'dark:text-red-500');
+      el('muteIcon').className = 'ph-fill ph-speaker-slash text-lg';
+    }
   } else {
-    audioPlayer.volume = previousVolume > 0 ? previousVolume : 1;
-    el('volSlider').value = audioPlayer.volume * 100;
+    if (isMuted) {
+      isMuted = false;
+      audioPlayer.muted = false;
+      el('btnMute').classList.remove('text-red-500', 'dark:text-red-500');
+      el('btnMute').classList.add('text-slate-500', 'dark:text-slate-400');
+    }
+    updateVolIcon(vol);
   }
-  updateVolIcon(audioPlayer.volume);
+  
   requestSaveState();
-};
+  nx.setConfig('volume', vol);
+});
 
 let isMuted = false;
 let preMuteVol = 1;
@@ -437,6 +438,7 @@ el('btnMute').onclick = () => {
   if (isMuted) {
     isMuted = false;
     audioPlayer.muted = false;
+    if (preMuteVol === 0) preMuteVol = 0.5;
     audioPlayer.volume = preMuteVol;
     volSlider.value = preMuteVol * 100;
     el('btnMute').classList.remove('text-red-500', 'dark:text-red-500');
@@ -455,8 +457,11 @@ el('btnMute').onclick = () => {
 };
 
 function updateVolIcon(vol) {
-  if (isMuted) return;
   const icon = el('muteIcon');
+  if (isMuted) {
+    icon.className = 'ph-fill ph-speaker-slash text-lg';
+    return;
+  }
   if (vol === 0) icon.className = 'ph-fill ph-speaker-x text-lg';
   else if (vol < 0.5) icon.className = 'ph-fill ph-speaker-low text-lg';
   else icon.className = 'ph-fill ph-speaker-high text-lg';
@@ -480,9 +485,13 @@ async function loadTrackUI(idx, autoPlay = true) {
   
   
   if (!metadataCache.has(track.path)) {
-    const m = await nx.extractMetadata(track.path);
-    metadataCache.set(track.path, m);
-    renderAllPlaylists();
+    try {
+      const m = await nx.extractMetadata(track.path);
+      metadataCache.set(track.path, m);
+      renderAllPlaylists();
+    } catch (err) {
+      console.error('Failed to extract metadata for', track.path, err);
+    }
   }
   
   const meta = metadataCache.get(track.path);
@@ -519,7 +528,7 @@ function playTrack(idx) {
   if (!playlist.length || idx < 0 || idx >= playlist.length) return;
   currentIdx = idx;
   const track = playlist[idx];
-  audioPlayer.src = `file://${track.path}`;
+  audioPlayer.src = pathToSafeURL(track.path);
   
   if (audioCtx && audioCtx.state === 'suspended') {
     audioCtx.resume();
@@ -532,25 +541,48 @@ function playTrack(idx) {
   
   progBar.style.setProperty('--val', '0%');
   loadTrackUI(idx, true);
-  renderAllPlaylists();
   requestSaveState();
+  renderAllPlaylists();
 
+  // Set basic MediaSession metadata from cache or filename fallback
   if ('mediaSession' in navigator) {
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: track.title || getFilename(track.path),
-      artist: track.artist || 'Unknown Artist',
-      album: track.album || 'Unknown Album',
-      artwork: track.cover ? [{ src: track.cover, sizes: '512x512', type: 'image/jpeg' }] : []
-    });
-    navigator.mediaSession.setActionHandler('play', () => audioPlayer.play());
-    navigator.mediaSession.setActionHandler('pause', () => audioPlayer.pause());
-    navigator.mediaSession.setActionHandler('previoustrack', () => playPrev());
-    navigator.mediaSession.setActionHandler('nexttrack', () => playNext());
+    const meta = metadataCache.get(track.path) || {};
+    updateMediaSession(track, meta);
   }
 }
 
+let lastMediaSessionArtworkUrl = null;
+async function updateMediaSession(track, meta) {
+  if (!('mediaSession' in navigator)) return;
+  let artwork = [];
+  if (meta.cover) {
+    try {
+      let fetchUrl = meta.cover;
+      if (fetchUrl.startsWith('file://')) {
+        fetchUrl = pathToSafeURL(decodeURIComponent(fetchUrl.replace('file://', '')));
+      }
+      const res = await fetch(fetchUrl);
+      if (res.ok) {
+        const blob = await res.blob();
+        if (lastMediaSessionArtworkUrl) URL.revokeObjectURL(lastMediaSessionArtworkUrl);
+        lastMediaSessionArtworkUrl = URL.createObjectURL(blob);
+        artwork = [{ src: lastMediaSessionArtworkUrl, sizes: '512x512', type: 'image/jpeg' }];
+      }
+    } catch (e) {
+      console.warn("Failed to set MediaSession artwork", e);
+    }
+  }
+  
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: meta.title || getFilename(track.path),
+    artist: meta.artist || 'Unknown Artist',
+    album: meta.album || 'Unknown Album',
+    artwork
+  });
+}
+
 // --- Playlist Operations ---
-function generateId() { return Math.random().toString(36).substr(2, 9); }
+function generateId() { return crypto.randomUUID(); }
 
 async function addFiles(paths, autoplay = false) {
   if (!paths || !paths.length) return;
@@ -577,8 +609,13 @@ async function addFiles(paths, autoplay = false) {
   // Background metadata fetch
   for (const t of playlist) {
     if (!metadataCache.has(t.path)) {
-      const meta = await nx.extractMetadata(t.path);
-      metadataCache.set(t.path, meta);
+      try {
+        const meta = await nx.extractMetadata(t.path);
+        metadataCache.set(t.path, meta);
+      } catch (err) {
+        console.error('Failed to extract metadata for', t.path, err);
+        continue;
+      }
       
       // Debounce rendering to prevent massive lag when loading many files
       clearTimeout(renderTimeout);
@@ -655,7 +692,11 @@ el('btnDeleteSelected').onclick = () => {
 };
 
 // --- Rendering Lists ---
-el('plSearch').addEventListener('input', renderAllPlaylists);
+let searchDebounceTimeout;
+el('plSearch').addEventListener('input', () => {
+  clearTimeout(searchDebounceTimeout);
+  searchDebounceTimeout = setTimeout(renderAllPlaylists, 300);
+});
 
 function renderAllPlaylists() {
   const mainContainer = el('trackList');
@@ -764,12 +805,19 @@ function attachDragHandlers(el, idx) {
     let insertAt = idx;
     if (dragSrcIdx < idx) insertAt--;
     if (dropPos === 'after') insertAt++;
+    insertAt = Math.max(0, Math.min(insertAt, playlist.length));
     
-    playlist.splice(Math.max(0, Math.min(insertAt, playlist.length)), 0, item);
+    playlist.splice(insertAt, 0, item);
     
-    if (currentIdx === dragSrcIdx) currentIdx = insertAt;
-    else if (currentIdx > dragSrcIdx && currentIdx <= insertAt) currentIdx--;
-    else if (currentIdx < dragSrcIdx && currentIdx >= insertAt) currentIdx++;
+    if (currentIdx === dragSrcIdx) {
+      currentIdx = insertAt;
+    } else {
+      // Recalculate: after splice-out, indices shifted. After splice-in, shifted again.
+      let newIdx = currentIdx;
+      if (newIdx > dragSrcIdx) newIdx--;   // splice-out shifted down
+      if (newIdx >= insertAt) newIdx++;    // splice-in shifted up
+      currentIdx = newIdx;
+    }
     
     renderAllPlaylists();
     requestSaveState();
@@ -827,7 +875,11 @@ async function loadNamedPlaylists() {
         await nx.deleteNamedPlaylist(pl.name);
         loadNamedPlaylists();
       } else {
-        playlist = await nx.loadNamedPlaylist(pl.name);
+        const loadedTracks = await nx.loadNamedPlaylist(pl.name);
+        playlist = (loadedTracks || []).map(t => ({
+          id: t.id || crypto.randomUUID(),
+          path: t.path || t,
+        }));
         currentIdx = -1;
         renderAllPlaylists();
         requestSaveState();
@@ -862,10 +914,10 @@ el('btnDownload').onclick = () => {
   const quality = el('dlQuality').value;
   
   const urls = input.split(',').map(s => s.trim()).filter(Boolean);
-  urls.forEach(url => {
-    downloadQueue.push({ url, title: url, progress: 0, status: 'waiting' });
-    nx.dlStart({ urls: [url], format, quality });
+  urls.forEach(u => {
+    downloadQueue.push({ url: u, title: u, progress: 0, status: 'waiting' });
   });
+  nx.dlStart({ urls, format, quality });
   renderDlQueue();
   el('dlInput').value = '';
 };
@@ -970,23 +1022,7 @@ function showToast(msg) {
   }, 3000);
 }
 
-// --- Drag and Drop ---
-document.addEventListener('dragover', (e) => {
-  e.preventDefault();
-  e.stopPropagation();
-});
-
-document.addEventListener('drop', (e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  if (e.dataTransfer && e.dataTransfer.files.length > 0) {
-    const paths = Array.from(e.dataTransfer.files).map(f => f.path).filter(p => p);
-    if (paths.length > 0) {
-      addFiles(paths, false);
-      showToast(`Added ${paths.length} items from drag & drop`);
-    }
-  }
-});
+// BUG-008 fix: Removed duplicate drag & drop handlers (block 1 at lines 775-795 handles this with overlay UX)
 
 // --- Audio Visualizer & EQ ---
 let audioCtx;
@@ -1057,13 +1093,22 @@ function initWebAudio() {
         const val = parseFloat(e.target.value);
         filter.gain.value = val;
         sliderVal.innerText = (val > 0 ? '+' : '') + val + 'dB';
-        nx.setConfig(`eq_${freq}`, val);
+        // BUG-002 fix: Save all EQ gains as single object under 'eqGains' key
+        const eqGains = {};
+        filters.forEach((f, j) => { eqGains[eqBands[j]] = f.gain.value; });
+        nx.setConfig('eqGains', eqGains);
         const presetSelect = el('eqPreset');
-        if (presetSelect) presetSelect.value = 'custom';
+        if (presetSelect && presetSelect.value !== 'custom') {
+          presetSelect.value = 'custom';
+          nx.setConfig('eqPresetName', 'custom');
+          const delBtn = el('btnDeletePreset');
+          if (delBtn) delBtn.classList.add('hidden');
+        }
       });
 
-      // Load saved gain
-      nx.getConfig(`eq_${freq}`).then(val => {
+      // BUG-002 fix: Load saved gain from eqGains object
+      nx.getConfig('eqGains').then(allGains => {
+        const val = allGains?.[freq] ?? null;
         if (val !== null) {
           filter.gain.value = val;
           slider.value = val;
@@ -1095,21 +1140,30 @@ function initWebAudio() {
   const btnResetEQ = el('btnResetEQ');
   if (btnResetEQ) {
     btnResetEQ.onclick = () => {
-      filters.forEach((f, i) => {
+      filters.forEach((f) => {
         f.gain.value = 0;
-        nx.setConfig(`eq_${eqBands[i]}`, 0);
       });
       document.querySelectorAll('#eqContainer input[type=range]').forEach(s => {
         s.value = 0;
-        s.dispatchEvent(new Event('input'));
+        const valSpan = s.parentElement.parentElement.querySelector('span.font-mono');
+        if (valSpan) valSpan.innerText = '0dB';
       });
+      // BUG-002 fix: Save reset EQ as single object
+      const resetGains = {};
+      eqBands.forEach(b => { resetGains[b] = 0; });
+      nx.setConfig('eqGains', resetGains);
       const presetSelect = el('eqPreset');
-      if (presetSelect) presetSelect.value = 'flat';
+      if (presetSelect) {
+        presetSelect.value = 'flat';
+        nx.setConfig('eqPresetName', 'flat');
+        const delBtn = el('btnDeletePreset');
+        if (delBtn) delBtn.classList.add('hidden');
+      }
     };
   }
 
   // EQ Presets
-  const presets = {
+  const defaultPresets = {
     flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     bass_boost: [6, 5, 4, 1, 0, 0, 0, 0, 0, 0],
     acoustic: [3, 4, 3, 1, 1, 1, 3, 3, 2, 2],
@@ -1119,21 +1173,133 @@ function initWebAudio() {
     rock: [4, 3, -1, -2, -1, 2, 4, 5, 4, 4],
     vocal: [-1, -2, 0, 2, 4, 4, 2, 0, -1, -1]
   };
+  let userPresets = {};
 
   const presetSelect = el('eqPreset');
+  const btnSavePreset = el('btnSavePreset');
+  const btnDeletePreset = el('btnDeletePreset');
+
+  function updatePresetDropdown() {
+    if (!presetSelect) return;
+    const options = Array.from(presetSelect.options);
+    options.forEach(opt => {
+      if (opt.value.startsWith('user_')) presetSelect.removeChild(opt);
+    });
+    Object.keys(userPresets).forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = `user_${p}`;
+      opt.innerText = p;
+      presetSelect.appendChild(opt);
+    });
+  }
+
+  function applyPreset(p) {
+    const isUser = p.startsWith('user_');
+    const pName = isUser ? p.replace('user_', '') : p;
+    const presetArr = isUser ? userPresets[pName] : defaultPresets[pName];
+    
+    if (presetArr) {
+      const eqGains = {};
+      filters.forEach((f, i) => {
+        f.gain.value = presetArr[i];
+        eqGains[eqBands[i]] = f.gain.value;
+      });
+      nx.setConfig('eqGains', eqGains);
+      document.querySelectorAll('#eqContainer input[type=range]').forEach((s, i) => {
+        s.value = presetArr[i];
+        const sliderValSpan = s.parentElement.parentElement.querySelector('span.font-mono');
+        if (sliderValSpan) sliderValSpan.innerText = (presetArr[i] > 0 ? '+' : '') + presetArr[i] + 'dB';
+      });
+      
+      nx.setConfig('eqPresetName', p);
+      if (btnDeletePreset) {
+        if (isUser) btnDeletePreset.classList.remove('hidden');
+        else btnDeletePreset.classList.add('hidden');
+      }
+    }
+  }
+
   if (presetSelect) {
     presetSelect.onchange = (e) => {
       const p = e.target.value;
-      if (presets[p]) {
-        filters.forEach((f, i) => {
-          f.gain.value = presets[p][i];
-          nx.setConfig(`eq_${eqBands[i]}`, f.gain.value);
-        });
-        document.querySelectorAll('#eqContainer input[type=range]').forEach((s, i) => {
-          s.value = presets[p][i];
-          const sliderValSpan = s.parentElement.parentElement.querySelector('span.font-mono');
-          if (sliderValSpan) sliderValSpan.innerText = (presets[p][i] > 0 ? '+' : '') + presets[p][i] + 'dB';
-        });
+      if (p === 'custom') {
+        nx.setConfig('eqPresetName', 'custom');
+        if (btnDeletePreset) btnDeletePreset.classList.add('hidden');
+      } else {
+        applyPreset(p);
+      }
+    };
+  }
+
+  Promise.all([
+    nx.getConfig('userEqPresets'),
+    nx.getConfig('eqPresetName')
+  ]).then(([uPresets, activeName]) => {
+    if (uPresets) userPresets = uPresets;
+    updatePresetDropdown();
+    
+    if (activeName) {
+      presetSelect.value = activeName;
+      if (btnDeletePreset) {
+        if (activeName.startsWith('user_')) btnDeletePreset.classList.remove('hidden');
+        else btnDeletePreset.classList.add('hidden');
+      }
+    }
+  });
+
+  const modal = el('presetPromptModal');
+  const input = el('presetNameInput');
+  const btnCancel = el('btnCancelPreset');
+  const btnConfirm = el('btnConfirmPreset');
+
+  if (btnSavePreset && modal) {
+    btnSavePreset.onclick = () => {
+      input.value = '';
+      modal.classList.remove('hidden');
+      setTimeout(() => input.focus(), 50);
+    };
+
+    const closeModal = () => {
+      modal.classList.add('hidden');
+    };
+
+    btnCancel.onclick = closeModal;
+    
+    const savePreset = () => {
+      const name = input.value;
+      if (!name || name.trim() === "") return;
+      const arr = filters.map(f => f.gain.value);
+      userPresets[name.trim()] = arr;
+      nx.setConfig('userEqPresets', userPresets);
+      updatePresetDropdown();
+      presetSelect.value = `user_${name.trim()}`;
+      nx.setConfig('eqPresetName', `user_${name.trim()}`);
+      if (btnDeletePreset) btnDeletePreset.classList.remove('hidden');
+      showToast(`Saved preset: ${name}`);
+      closeModal();
+    };
+
+    btnConfirm.onclick = savePreset;
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') savePreset();
+      if (e.key === 'Escape') closeModal();
+    };
+  }
+
+  if (btnDeletePreset) {
+    btnDeletePreset.onclick = () => {
+      const p = presetSelect.value;
+      if (p.startsWith('user_')) {
+        const pName = p.replace('user_', '');
+        if (confirm(`Delete preset "${pName}"?`)) {
+          delete userPresets[pName];
+          nx.setConfig('userEqPresets', userPresets);
+          updatePresetDropdown();
+          presetSelect.value = 'custom';
+          nx.setConfig('eqPresetName', 'custom');
+          btnDeletePreset.classList.add('hidden');
+          showToast(`Deleted preset: ${pName}`);
+        }
       }
     };
   }
@@ -1154,6 +1320,11 @@ function drawVisualizer() {
   const dataArray = new Uint8Array(bufferLength);
 
   function renderFrame() {
+    if (audioPlayer.paused) {
+      visualizerReq = null;
+      return; // Stop rendering to save CPU/GPU when paused
+    }
+
     visualizerReq = requestAnimationFrame(renderFrame);
     
     // Only render if Player tab is active to save resources
@@ -1172,9 +1343,9 @@ function drawVisualizer() {
 
       // Use sky blue color with dynamic opacity
       const opacity = barHeight / 255;
-      const r = theme === 'dark' ? 14 : 14;
-      const g = theme === 'dark' ? 165 : 165;
-      const b = theme === 'dark' ? 233 : 233;
+      const r = theme === 'dark' ? 56 : 14;
+      const g = theme === 'dark' ? 189 : 165;
+      const b = theme === 'dark' ? 248 : 233;
       ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
       
       const h = (barHeight / 255) * canvas.height;
@@ -1183,8 +1354,56 @@ function drawVisualizer() {
       x += barWidth + 1;
     }
   }
-  renderFrame();
+  
+  if (!audioPlayer.paused) {
+    renderFrame();
+  }
+  
+  audioPlayer.addEventListener('play', () => {
+    if (!visualizerReq) renderFrame();
+  });
 }
 
 initWebAudio();
 init();
+
+// Global Keyboard Shortcuts
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+
+  switch(e.code) {
+    case 'Space':
+      e.preventDefault();
+      const playBtn = document.getElementById('btnPlay');
+      if (playBtn) playBtn.click();
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      const vsUp = el('volSlider');
+      if(vsUp) {
+        vsUp.value = Math.min(100, parseInt(vsUp.value) + 5);
+        vsUp.dispatchEvent(new Event('input'));
+      }
+      break;
+    case 'ArrowDown':
+      e.preventDefault();
+      const vsDown = el('volSlider');
+      if(vsDown) {
+        vsDown.value = Math.max(0, parseInt(vsDown.value) - 5);
+        vsDown.dispatchEvent(new Event('input'));
+      }
+      break;
+    case 'ArrowLeft':
+      e.preventDefault();
+      if (typeof audioPlayer !== 'undefined' && audioPlayer) {
+        audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 5);
+      }
+      break;
+    case 'ArrowRight':
+      e.preventDefault();
+      if (typeof audioPlayer !== 'undefined' && audioPlayer && audioPlayer.duration) {
+        audioPlayer.currentTime = Math.min(audioPlayer.duration, audioPlayer.currentTime + 5);
+      }
+      break;
+  }
+});
