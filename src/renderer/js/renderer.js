@@ -9,9 +9,33 @@ let isLoop = false;
 let isAutoNext = true;
 let isDraggingSlider = false;
 
-let metadataCache = new Map();
+class LRUMap {
+  constructor(maxSize = 2000) {
+    this.maxSize = maxSize;
+    this.map = new Map();
+  }
+  has(k) { return this.map.has(k); }
+  get(k) {
+    if (!this.map.has(k)) return undefined;
+    const v = this.map.get(k);
+    this.map.delete(k);
+    this.map.set(k, v);
+    return v;
+  }
+  set(k, v) {
+    if (this.map.has(k)) this.map.delete(k);
+    this.map.set(k, v);
+    if (this.map.size > this.maxSize) {
+      this.map.delete(this.map.keys().next().value);
+    }
+  }
+}
+let metadataCache = new LRUMap(2000);
 let theme = 'light';
 let downloadQueue = [];
+let isVisualizerEnabled = true;
+let isMuted = false;
+let preMuteVol = 1;
 
 const audioPlayer = new Audio();
 audioPlayer.crossOrigin = "anonymous";
@@ -36,14 +60,28 @@ async function init() {
     theme = await nx.getConfig('theme') || 'light';
     if (theme === 'dark') document.documentElement.classList.add('dark');
     
+    isVisualizerEnabled = await nx.getConfig('visualizerEnabled') ?? true;
+    updateVisualizerButton();
+    
+
     audioPlayer.volume = await nx.getConfig('volume') ?? 1;
     el('volSlider').value = audioPlayer.volume * 100;
     updateVolIcon(audioPlayer.volume);
+    
+    const volTooltip = el('volTooltip');
+    if (volTooltip) volTooltip.innerText = `${Math.round(audioPlayer.volume * 100)}%`;
+    const muteTooltip = el('muteTooltip');
+    if (muteTooltip) muteTooltip.innerText = audioPlayer.muted ? 'Unmute' : 'Mute';
 
     const state = await nx.loadState();
     if (state) {
-      playlist = state.playlist || [];
+      const validExts = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac'];
+      playlist = (state.playlist || []).filter(t => {
+        const ext = t.path.substring(t.path.lastIndexOf('.')).toLowerCase();
+        return validExts.includes(ext);
+      });
       currentIdx = state.currentIdx ?? -1;
+      if (currentIdx >= playlist.length) currentIdx = playlist.length > 0 ? 0 : -1;
       isShuffle = state.isShuffle || false;
       isLoop = state.isLoop || false;
       isAutoNext = state.autoNext ?? true;
@@ -81,7 +119,7 @@ async function init() {
     loadNamedPlaylists();
 
     const p = await nx.dlGetPath();
-    el('btnChangePath').innerText = p;
+    el('dlPathText').innerText = p;
 
     const deps = await nx.dlCheckDeps();
     if (!deps.ytdlp || !deps.ffmpeg) {
@@ -95,6 +133,38 @@ async function init() {
       navigator.mediaSession.setActionHandler('previoustrack', () => playPrev());
       navigator.mediaSession.setActionHandler('nexttrack', () => playNext());
     }
+
+    // Initialize UI Plugins
+    window.NexusAPI = {
+      playlist,
+      audioPlayer,
+      playTrack,
+      playNext,
+      playPrev,
+      showToast,
+      escapeHtml,
+      el: (id) => document.getElementById(id),
+      nx: window.nx
+    };
+
+    const uiPlugins = await nx.getUIPlugins();
+    uiPlugins.forEach(p => {
+      try {
+        const script = document.createElement('script');
+        script.textContent = `
+          (function() {
+            try {
+              ${p.code}
+            } catch(e) { console.error('[Plugin: ${p.name}] Runtime Error:', e); }
+          })();
+        `;
+        document.body.appendChild(script);
+        console.log('[Plugins] Loaded:', p.name);
+      } catch (err) {
+        console.error('[Plugins] Init Error:', p.name, err);
+      }
+    });
+
   } catch (err) {
     console.error("Init Error:", err);
   }
@@ -104,8 +174,11 @@ async function init() {
 let saveTimeout;
 function requestSaveState() {
   clearTimeout(saveTimeout);
-  saveTimeout = setTimeout(() => {
-    nx.saveState({ playlist, currentIdx, isShuffle, isLoop, autoNext: isAutoNext, volume: audioPlayer.volume });
+  saveTimeout = setTimeout(async () => {
+    const res = await nx.saveState({ playlist, currentIdx, isShuffle, isLoop, autoNext: isAutoNext, volume: audioPlayer.volume });
+    if (res && !res.success) {
+      console.error("Save state failed:", res.error);
+    }
   }, 500);
 }
 
@@ -115,11 +188,50 @@ el('maxBtn').onclick = () => nx.maximize();
 el('minBtn').onclick = () => nx.minimize();
 el('miniPlayerBtn').onclick = () => nx.toggleMiniPlayer();
 
+el('btnAlwaysOnTop')?.addEventListener('click', (e) => {
+  nx.toggleAlwaysOnTop();
+  const btn = e.currentTarget;
+  if (btn.classList.contains('text-sky-500')) {
+    btn.classList.remove('text-sky-500');
+    btn.classList.add('text-slate-400');
+  } else {
+    btn.classList.remove('text-slate-400');
+    btn.classList.add('text-sky-500');
+  }
+});
+
 el('themeBtn').onclick = () => {
   theme = theme === 'dark' ? 'light' : 'dark';
   if (theme === 'dark') document.documentElement.classList.add('dark');
   else document.documentElement.classList.remove('dark');
   nx.setConfig('theme', theme);
+};
+function updateVisualizerButton() {
+  const btn = el('visualizerBtn');
+  const tooltip = el('visualizerTooltip');
+  if (!btn) return;
+  if (isVisualizerEnabled) {
+    btn.style.color = '#0ea5e9';
+    if (tooltip) tooltip.innerText = 'Visualizer: ON';
+  } else {
+    btn.style.color = '#94a3b8';
+    if (tooltip) tooltip.innerText = 'Visualizer: OFF';
+  }
+}
+
+el('visualizerBtn').onclick = () => {
+  isVisualizerEnabled = !isVisualizerEnabled;
+  updateVisualizerButton();
+  nx.setConfig('visualizerEnabled', isVisualizerEnabled);
+  if (!isVisualizerEnabled) {
+    const canvas = el('visualizerCanvas');
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  } else if (!audioPlayer.paused) {
+    startVisualizer();
+  }
 };
 
 // --- Mini Player Mode ---
@@ -229,6 +341,18 @@ const escapeHtml = (str) => {
 
 audioPlayer.addEventListener('timeupdate', () => {
   if(isDraggingSlider || !audioPlayer.duration) return;
+
+  if (
+    typeof crossfadeDuration !== 'undefined' && crossfadeDuration > 0 &&
+    !isLoop &&
+    isAutoNext &&
+    !crossfadeTimer &&
+    audioPlayer.duration - audioPlayer.currentTime <= crossfadeDuration
+  ) {
+    crossfadeTimer = true;
+    if (typeof startCrossfade === 'function') startCrossfade();
+  }
+
   const cur = audioPlayer.currentTime;
   const tot = audioPlayer.duration;
   el('currentTimeText').innerText = formatTime(cur);
@@ -273,7 +397,7 @@ audioPlayer.addEventListener('error', (e) => {
 });
 
 function updatePlayPauseUI() {
-  el('fsPlayIcon').className = isPlaying ? 'ph-fill ph-pause text-2xl ml-1' : 'ph-fill ph-play text-2xl ml-1';
+  el('fsPlayIcon').className = isPlaying ? 'ph-fill ph-pause text-2xl' : 'ph-fill ph-play text-2xl ml-[2px]';
   el('playTooltip').innerText = isPlaying ? 'Pause' : 'Play';
   
   el('miniPlayIcon').className = isPlaying ? 'ph-fill ph-pause text-lg ml-0.5' : 'ph-fill ph-play text-lg ml-0.5';
@@ -284,10 +408,12 @@ function updatePlayPauseUI() {
 }
 
 function updateControlStateUI() {
-  el('btnShuffle').style.color = isShuffle ? '#0ea5e9' : '';
-  el('btnLoop').style.color = isLoop ? '#0ea5e9' : '';
-  el('btnAutoNext').style.color = isAutoNext ? '#0ea5e9' : '';
+  el('btnShuffle').style.color = isShuffle ? '#0ea5e9' : '#94a3b8';
+  el('btnLoop').style.color = isLoop ? '#0ea5e9' : '#94a3b8';
+  el('btnAutoNext').style.color = isAutoNext ? '#0ea5e9' : '#94a3b8';
   el('autoNextTooltip').innerText = `Auto-Next: ${isAutoNext ? 'ON' : 'OFF'}`;
+  const cb = el('cbAutoPlayNext');
+  if (cb) cb.checked = isAutoNext;
 }
 
 // --- Progress Bar Interaction ---
@@ -409,6 +535,9 @@ el('volSlider').addEventListener('input', (e) => {
   audioPlayer.volume = vol;
   volSlider.style.setProperty('--val', `${volSlider.value}%`);
   
+  const volTooltip = el('volTooltip');
+  if (volTooltip) volTooltip.innerText = `${Math.round(vol * 100)}%`;
+  
   if (vol === 0) {
     if (!isMuted) {
       isMuted = true;
@@ -416,6 +545,8 @@ el('volSlider').addEventListener('input', (e) => {
       el('btnMute').classList.remove('text-slate-500', 'dark:text-slate-400');
       el('btnMute').classList.add('text-red-500', 'dark:text-red-500');
       el('muteIcon').className = 'ph-fill ph-speaker-slash text-lg';
+      const muteTooltip = el('muteTooltip');
+      if (muteTooltip) muteTooltip.innerText = 'Unmute';
     }
   } else {
     if (isMuted) {
@@ -423,6 +554,8 @@ el('volSlider').addEventListener('input', (e) => {
       audioPlayer.muted = false;
       el('btnMute').classList.remove('text-red-500', 'dark:text-red-500');
       el('btnMute').classList.add('text-slate-500', 'dark:text-slate-400');
+      const muteTooltip = el('muteTooltip');
+      if (muteTooltip) muteTooltip.innerText = 'Mute';
     }
     updateVolIcon(vol);
   }
@@ -431,8 +564,6 @@ el('volSlider').addEventListener('input', (e) => {
   nx.setConfig('volume', vol);
 });
 
-let isMuted = false;
-let preMuteVol = 1;
 
 el('btnMute').onclick = () => {
   if (isMuted) {
@@ -444,6 +575,10 @@ el('btnMute').onclick = () => {
     el('btnMute').classList.remove('text-red-500', 'dark:text-red-500');
     el('btnMute').classList.add('text-slate-500', 'dark:text-slate-400');
     updateVolIcon(preMuteVol);
+    const muteTooltip = el('muteTooltip');
+    if (muteTooltip) muteTooltip.innerText = 'Mute';
+    const volTooltip = el('volTooltip');
+    if (volTooltip) volTooltip.innerText = `${Math.round(preMuteVol * 100)}%`;
   } else {
     isMuted = true;
     preMuteVol = audioPlayer.volume || 1;
@@ -452,6 +587,10 @@ el('btnMute').onclick = () => {
     el('btnMute').classList.remove('text-slate-500', 'dark:text-slate-400');
     el('btnMute').classList.add('text-red-500', 'dark:text-red-500');
     el('muteIcon').className = 'ph-fill ph-speaker-slash text-lg';
+    const muteTooltip = el('muteTooltip');
+    if (muteTooltip) muteTooltip.innerText = 'Unmute';
+    const volTooltip = el('volTooltip');
+    if (volTooltip) volTooltip.innerText = '0%';
   }
   volSlider.style.setProperty('--val', `${volSlider.value}%`);
 };
@@ -494,9 +633,9 @@ async function loadTrackUI(idx, autoPlay = true) {
     }
   }
   
-  const meta = metadataCache.get(track.path);
-  const title = meta.title || getFilename(track.path);
-  const artist = meta.artist || 'Unknown Artist';
+  const meta = metadataCache.get(track.path) ?? {};
+  const title = meta?.title || getFilename(track.path);
+  const artist = meta?.artist || 'Unknown Artist';
   
   el('fsTitle').innerText = title;
   el('fsArtist').innerText = artist;
@@ -522,7 +661,29 @@ async function loadTrackUI(idx, autoPlay = true) {
   
   nx.notifySongChange({ title, artist, cover: meta.cover });
   nx.updateTray({ title, isPlaying: autoPlay });
+  
+  if (typeof resetMarqueeCache === 'function') resetMarqueeCache();
+  setTimeout(updateAutoMarquee, 50); // wait for DOM to update text
 }
+
+function updateAutoMarquee() {
+  ['fsTitle', 'miniTitle'].forEach(id => {
+    const textEl = el(id);
+    if (!textEl) return;
+    const container = textEl.closest('.marquee-container');
+    if (!container) return;
+    
+    if (setupMarquee(container)) {
+      container.classList.add('marquee-auto');
+    } else {
+      container.classList.remove('marquee-auto');
+    }
+  });
+}
+window.addEventListener('resize', () => {
+  clearTimeout(window.resizeTimer);
+  window.resizeTimer = setTimeout(updateAutoMarquee, 200);
+});
 
 function playTrack(idx) {
   if (!playlist.length || idx < 0 || idx >= playlist.length) return;
@@ -542,7 +703,7 @@ function playTrack(idx) {
   progBar.style.setProperty('--val', '0%');
   loadTrackUI(idx, true);
   requestSaveState();
-  renderAllPlaylists();
+  updatePlaylistHighlight();
 
   // Set basic MediaSession metadata from cache or filename fallback
   if ('mediaSession' in navigator) {
@@ -551,10 +712,18 @@ function playTrack(idx) {
   }
 }
 
-let lastMediaSessionArtworkUrl = null;
 async function updateMediaSession(track, meta) {
   if (!('mediaSession' in navigator)) return;
-  let artwork = [];
+  
+  const setMeta = (artworkArr) => {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: meta.title || getFilename(track.path),
+      artist: meta.artist || '',
+      album: meta.album || '',
+      artwork: artworkArr
+    });
+  };
+
   if (meta.cover) {
     try {
       let fetchUrl = meta.cover;
@@ -564,21 +733,19 @@ async function updateMediaSession(track, meta) {
       const res = await fetch(fetchUrl);
       if (res.ok) {
         const blob = await res.blob();
-        if (lastMediaSessionArtworkUrl) URL.revokeObjectURL(lastMediaSessionArtworkUrl);
-        lastMediaSessionArtworkUrl = URL.createObjectURL(blob);
-        artwork = [{ src: lastMediaSessionArtworkUrl, sizes: '512x512', type: 'image/jpeg' }];
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setMeta([{ src: reader.result, sizes: '512x512', type: blob.type }]);
+        };
+        reader.readAsDataURL(blob);
+        return;
       }
     } catch (e) {
       console.warn("Failed to set MediaSession artwork", e);
     }
   }
   
-  navigator.mediaSession.metadata = new MediaMetadata({
-    title: meta.title || getFilename(track.path),
-    artist: meta.artist || 'Unknown Artist',
-    album: meta.album || 'Unknown Album',
-    artwork
-  });
+  setMeta([]);
 }
 
 // --- Playlist Operations ---
@@ -604,23 +771,19 @@ async function addFiles(paths, autoplay = false) {
     playTrack(wasEmpty ? 0 : firstNewIdx);
   }
 
-  let renderTimeout;
-  
-  // Background metadata fetch
-  for (const t of playlist) {
-    if (!metadataCache.has(t.path)) {
+  // Parallel metadata fetch with concurrency limit
+  const BATCH = 5;
+  for (let i = 0; i < newPaths.length; i += BATCH) {
+    const batch = newPaths.slice(i, i + BATCH).filter(p => !metadataCache.has(p));
+    await Promise.allSettled(batch.map(async (p) => {
       try {
-        const meta = await nx.extractMetadata(t.path);
-        metadataCache.set(t.path, meta);
+        const meta = await nx.extractMetadata(p);
+        metadataCache.set(p, meta);
       } catch (err) {
-        console.error('Failed to extract metadata for', t.path, err);
-        continue;
+        console.error('Metadata fetch failed:', p, err);
       }
-      
-      // Debounce rendering to prevent massive lag when loading many files
-      clearTimeout(renderTimeout);
-      renderTimeout = setTimeout(() => renderAllPlaylists(), 300);
-    }
+    }));
+    renderAllPlaylists();
   }
 }
 
@@ -644,6 +807,26 @@ el('btnClearPl').onclick = () => {
   renderAllPlaylists();
   requestSaveState();
 };
+
+// Export button
+el('btnExportPl')?.addEventListener('click', async () => {
+  if (!playlist.length) return showToast('Playlist is empty');
+  const tracks = playlist.map(t => {
+    const meta = metadataCache.get(t.path) || {};
+    return { path: t.path, title: meta.title, artist: meta.artist, duration: meta.duration };
+  });
+  const saved = await nx.exportPlaylist(tracks);
+  if (saved) showToast('Playlist exported: ' + saved);
+});
+
+// Import button
+el('btnImportPl')?.addEventListener('click', async () => {
+  const paths = await nx.importPlaylist();
+  if (paths?.length) {
+    await addFiles(paths, false);
+    showToast(`Imported ${paths.length} tracks`);
+  }
+});
 
 window.removeTrack = (idx, event, skipRender = false) => {
   if (event) event.stopPropagation();
@@ -698,6 +881,60 @@ el('plSearch').addEventListener('input', () => {
   searchDebounceTimeout = setTimeout(renderAllPlaylists, 300);
 });
 
+function updatePlaylistHighlight() {
+  const allMainItems = el('trackList').querySelectorAll('.track-item');
+  const allMiniItems = el('miniQueueList').querySelectorAll('.track-item');
+  
+  if (allMainItems.length > 0 && allMainItems.length === playlist.length) {
+    allMainItems.forEach((pItem, idx) => {
+      const isActive = (idx === currentIdx);
+      
+      // Update Main Item
+      if (isActive) {
+        pItem.className = 'track-item flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all duration-300 border hover:-translate-y-0.5 hover:shadow-md bg-sky-50/50 dark:bg-sky-900/30 border-sky-200 dark:border-sky-800 shadow-sm';
+        const titleEl = pItem.querySelector('h4');
+        if (titleEl) titleEl.className = 'font-semibold text-sm truncate text-sky-700 dark:text-sky-400';
+        const iconEl = pItem.querySelector('i');
+        if (iconEl && iconEl.classList.contains('ph-music-note')) {
+          iconEl.className = 'ph-fill ph-waveform animate-pulse text-lg';
+        }
+      } else {
+        pItem.className = 'track-item flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all duration-300 border hover:-translate-y-0.5 hover:shadow-md bg-white dark:bg-slate-800 border-transparent hover:border-slate-200 dark:hover:border-slate-600';
+        const titleEl = pItem.querySelector('h4');
+        if (titleEl) titleEl.className = 'font-semibold text-sm truncate text-slate-700 dark:text-slate-200';
+        const iconEl = pItem.querySelector('i.ph-waveform');
+        if (iconEl) {
+          iconEl.className = 'ph-fill ph-music-note text-lg';
+        }
+      }
+      
+      // Update Mini Item
+      const mItem = allMiniItems[idx];
+      if (mItem) {
+        if (isActive) {
+          mItem.className = 'track-item flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors bg-sky-100/60 dark:bg-sky-900/50 border border-sky-200 dark:border-sky-700';
+          const mTitle = mItem.querySelector('h4');
+          if (mTitle) mTitle.className = 'marquee-text font-semibold text-xs text-sky-700 dark:text-sky-300';
+          const mIcon = mItem.querySelector('i');
+          if (mIcon && mIcon.classList.contains('ph-music-note')) {
+            mIcon.className = 'ph-fill ph-waveform text-sky-500 animate-pulse text-sm pointer-events-none';
+          }
+        } else {
+          mItem.className = 'track-item flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors hover:bg-slate-100 dark:hover:bg-slate-700 border border-transparent';
+          const mTitle = mItem.querySelector('h4');
+          if (mTitle) mTitle.className = 'marquee-text font-semibold text-xs text-slate-600 dark:text-slate-300';
+          const mIcon = mItem.querySelector('i.ph-waveform');
+          if (mIcon) {
+            mIcon.className = 'ph-fill ph-music-note text-slate-400 text-sm pointer-events-none';
+          }
+        }
+      }
+    });
+  } else {
+    renderAllPlaylists();
+  }
+}
+
 function renderAllPlaylists() {
   const mainContainer = el('trackList');
   const miniContainer = el('miniQueueList');
@@ -724,8 +961,10 @@ function renderAllPlaylists() {
     mItem.draggable = true;
     mItem.innerHTML = `
       <i class="ph-fill ${isActive ? 'ph-waveform text-sky-500 animate-pulse' : 'ph-music-note text-slate-400'} text-sm pointer-events-none"></i>
-      <div class="flex flex-col flex-1 overflow-hidden pointer-events-none">
-        <h4 class="font-semibold text-xs truncate ${isActive ? 'text-sky-700 dark:text-sky-300' : 'text-slate-600 dark:text-slate-300'}">${escapeHtml(name)}</h4>
+      <div class="flex flex-col flex-1 min-w-0 overflow-hidden pointer-events-none">
+        <div class="marquee-container">
+          <h4 class="marquee-text font-semibold text-xs ${isActive ? 'text-sky-700 dark:text-sky-300' : 'text-slate-600 dark:text-slate-300'}">${escapeHtml(name)}</h4>
+        </div>
         <span class="text-[10px] text-slate-400 truncate">${escapeHtml(artist)}</span>
       </div>
     `;
@@ -786,6 +1025,7 @@ function attachDragHandlers(el, idx) {
     dragSrcIdx = null;
   };
   el.ondragover = (e) => {
+    if (dragSrcIdx === null) return; // Allow external drops to bubble up
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     const rect = el.getBoundingClientRect();
@@ -797,6 +1037,7 @@ function attachDragHandlers(el, idx) {
     }
   };
   el.ondrop = (e) => {
+    if (dragSrcIdx === null) return; // Allow external drops to bubble up
     e.preventDefault();
     e.stopPropagation();
     if (dragSrcIdx === null || dragSrcIdx === idx) return;
@@ -824,33 +1065,43 @@ function attachDragHandlers(el, idx) {
   };
 }
 
-// --- Drag & Drop Files from OS ---
-document.ondragover = (e) => {
-  e.preventDefault();
-  if (e.dataTransfer.types.includes('Files')) el('dropOverlay').classList.remove('hidden');
-};
-document.ondragleave = (e) => {
-  if (e.relatedTarget === null) el('dropOverlay').classList.add('hidden');
-};
-document.ondrop = (e) => {
-  e.preventDefault();
-  el('dropOverlay').classList.add('hidden');
-  const files = [];
-  if (e.dataTransfer.items) {
-    for (const item of e.dataTransfer.items) {
-      if (item.kind === 'file') {
-        const file = item.getAsFile();
-        if (file && file.path) files.push(file.path);
-      }
-    }
-  }
-  if (files.length) addFiles(files);
-};
+
 
 // --- Named Playlists ---
+function showInputModal(title, placeholder = '') {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'fixed inset-0 bg-black/40 z-50 flex items-center justify-center';
+    overlay.innerHTML = `
+      <div class="bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-2xl w-80">
+        <h3 class="font-semibold text-slate-700 dark:text-slate-200 mb-3">${escapeHtml(title)}</h3>
+        <input id="_modalInput" type="text" placeholder="${escapeHtml(placeholder)}"
+          class="w-full border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-2 
+                 text-sm dark:bg-slate-700 dark:text-white outline-none focus:ring-2 
+                 focus:ring-sky-400 mb-4">
+        <div class="flex gap-2 justify-end">
+          <button id="_modalCancel" class="px-4 py-1.5 text-sm text-slate-500 
+                  hover:text-slate-700 rounded-lg">Cancel</button>
+          <button id="_modalOk" class="px-4 py-1.5 text-sm bg-sky-500 text-white 
+                  rounded-lg hover:bg-sky-600">Save</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('#_modalInput');
+    setTimeout(() => input.focus(), 50);
+    const submit = () => { resolve(input.value.trim()); overlay.remove(); };
+    const cancel = () => { resolve(null); overlay.remove(); };
+    overlay.querySelector('#_modalOk').onclick = submit;
+    overlay.querySelector('#_modalCancel').onclick = cancel;
+    input.onkeydown = (e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') cancel(); };
+    overlay.onclick = (e) => { if (e.target === overlay) cancel(); };
+  });
+}
+
 el('btnSavePl').onclick = async () => {
   if (!playlist.length) return;
-  const name = prompt("Enter playlist name:");
+  const name = await showInputModal('Save Playlist', 'Playlist name...');
   if (name) {
     await nx.saveNamedPlaylist(name, playlist);
     loadNamedPlaylists();
@@ -893,7 +1144,7 @@ async function loadNamedPlaylists() {
 // --- Downloader ---
 el('btnChangePath').onclick = async () => {
   const p = await nx.dlChangePath();
-  if (p) el('btnChangePath').innerText = p;
+  if (p) el('dlPathText').innerText = p;
 };
 
 el('dlFormat').onchange = () => {
@@ -913,7 +1164,7 @@ el('btnDownload').onclick = () => {
   const format = el('dlFormat').value;
   const quality = el('dlQuality').value;
   
-  const urls = input.split(',').map(s => s.trim()).filter(Boolean);
+  const urls = input.split(/[\s,]+/).filter(Boolean);
   urls.forEach(u => {
     downloadQueue.push({ url: u, title: u, progress: 0, status: 'waiting' });
   });
@@ -921,6 +1172,15 @@ el('btnDownload').onclick = () => {
   renderDlQueue();
   el('dlInput').value = '';
 };
+
+el('dlFormat').addEventListener('change', (e) => {
+  const format = e.target.value;
+  if (format === 'wav' || format === 'flac') {
+    el('dlQualityContainer').style.display = 'none';
+  } else {
+    el('dlQualityContainer').style.display = 'block';
+  }
+});
 
 let dlRenderTimeout;
 function renderDlQueue() {
@@ -938,7 +1198,7 @@ function renderDlQueue() {
       let statusColor = 'bg-slate-200 text-slate-500';
       if (item.status === 'downloading') statusColor = 'bg-sky-500 text-white';
       else if (item.status === 'complete') statusColor = 'bg-green-500 text-white';
-      else if (item.status === 'error') statusColor = 'bg-red-500 text-white';
+      else if (item.status === 'error' || item.status === 'cancel') statusColor = 'bg-red-500 text-white';
 
       html += `
         <div class="bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-lg p-3 flex items-center gap-3 shadow-sm transition-all hover:shadow-md">
@@ -949,7 +1209,7 @@ function renderDlQueue() {
           <div class="flex-1 min-w-0 flex flex-col justify-center">
             <div class="flex justify-between items-start gap-2">
               <h4 class="text-sm font-bold text-slate-700 dark:text-slate-200 truncate">${escapeHtml(item.title || item.url)}</h4>
-              ${(item.status === 'downloading' || item.status === 'waiting') ? `<button onclick="nx.cancelDownload('${item.url}')" class="text-slate-400 hover:text-red-500 transition-colors" title="Cancel Download"><i class="ph-bold ph-x"></i></button>` : ''}
+              ${(item.status === 'downloading' || item.status === 'waiting') ? `<button class="cancel-btn text-slate-400 hover:text-red-500 transition-colors" data-url="${escapeHtml(item.url)}" title="Cancel Download"><i class="ph-bold ph-x"></i></button>` : ''}
             </div>
             <div class="flex items-center gap-2 mt-1">
               <span class="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusColor}">${item.status}</span>
@@ -968,8 +1228,18 @@ function renderDlQueue() {
   }, 100); // Max 10 updates per second
 };
 
+el('dlQueue').addEventListener('click', (e) => {
+  const btn = e.target.closest('.cancel-btn');
+  if (btn) {
+    e.stopPropagation();
+    nx.cancelDownload(btn.dataset.url);
+  }
+});
+
 nx.onDlProgress(({ url, percent, speed, eta }) => {
-  const item = downloadQueue.find(i => i.url === url);
+  // Find the latest matching item that is not already completed/cancelled
+  let item = downloadQueue.findLast(i => i.url === url && i.status !== 'complete' && i.status !== 'cancel');
+  if (!item) item = downloadQueue.findLast(i => i.url === url);
   if (item) {
     item.progress = parseFloat(percent) || 0;
     item.speed = speed;
@@ -979,16 +1249,22 @@ nx.onDlProgress(({ url, percent, speed, eta }) => {
   }
 });
 
-nx.onDlError(({ url }) => {
-  const item = downloadQueue.find(i => i.url === url);
+nx.onDlError(({ url, message }) => {
+  let item = downloadQueue.findLast(i => i.url === url && i.status !== 'complete' && i.status !== 'cancel');
+  if (!item) item = downloadQueue.findLast(i => i.url === url);
   if (item) {
-    item.status = 'error';
+    if (message && message.toLowerCase().includes('cancelled')) {
+      item.status = 'cancel';
+    } else {
+      item.status = 'error';
+    }
     renderDlQueue();
   }
 });
 
 nx.onDlSuccess(({ url, filePath, metadata }) => {
-  const item = downloadQueue.find(i => i.url === url);
+  let item = downloadQueue.findLast(i => i.url === url && i.status !== 'complete' && i.status !== 'cancel');
+  if (!item) item = downloadQueue.findLast(i => i.url === url);
   if (item) {
     item.status = 'complete';
     item.cover = metadata?.cover || null;
@@ -999,6 +1275,13 @@ nx.onDlSuccess(({ url, filePath, metadata }) => {
   // Auto-add downloaded file to playlist
   addFiles([filePath], false);
   showToast(`Download complete: ${item ? item.title : getFilename(filePath)}`);
+});
+
+nx.onDlComplete(() => {
+  downloadQueue = downloadQueue.filter(i => 
+    i.status === 'waiting' || i.status === 'downloading'
+  );
+  renderDlQueue();
 });
 
 // --- Toast Notifications ---
@@ -1106,14 +1389,11 @@ function initWebAudio() {
         }
       });
 
-      // BUG-002 fix: Load saved gain from eqGains object
       nx.getConfig('eqGains').then(allGains => {
-        const val = allGains?.[freq] ?? null;
-        if (val !== null) {
-          filter.gain.value = val;
-          slider.value = val;
-          sliderVal.innerText = (val > 0 ? '+' : '') + val + 'dB';
-        }
+        const val = allGains?.[freq] ?? 0;
+        filter.gain.value = val;
+        slider.value = val;
+        sliderVal.innerText = (val > 0 ? '+' : '') + val + 'dB';
       });
 
       const label = document.createElement('span');
@@ -1125,16 +1405,19 @@ function initWebAudio() {
       col.appendChild(sliderWrapper);
       col.appendChild(label);
       eqContainer.appendChild(col);
-
-      // Initial text update
-      setTimeout(() => {
-        sliderVal.innerText = (filter.gain.value > 0 ? '+' : '') + filter.gain.value + 'dB';
-      }, 100);
     }
   });
   
+  const compressor = audioCtx.createDynamicsCompressor();
+  compressor.threshold.value = -3;
+  compressor.knee.value = 10;
+  compressor.ratio.value = 4;
+  compressor.attack.value = 0.005;
+  compressor.release.value = 0.05;
+
   prevNode.connect(analyser);
-  analyser.connect(audioCtx.destination);
+  analyser.connect(compressor);
+  compressor.connect(audioCtx.destination);
   
   // Reset EQ logic
   const btnResetEQ = el('btnResetEQ');
@@ -1304,53 +1587,244 @@ function initWebAudio() {
     };
   }
 
-  drawVisualizer();
+  startVisualizer();
 }
 
-function drawVisualizer() {
-  if (!analyser) return;
+let visualizerDataArray;
+
+function renderVisualizerFrame() {
+  if (audioPlayer.paused || !isVisualizerEnabled || !analyser) {
+    visualizerReq = null;
+    if (!isVisualizerEnabled) {
+      const canvas = el('visualizerCanvas');
+      if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    }
+    return;
+  }
+
+  visualizerReq = requestAnimationFrame(renderVisualizerFrame);
+  
+  if (!el('player').classList.contains('active')) return;
+
   const canvas = el('visualizerCanvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   
-  canvas.width = canvas.clientWidth;
-  canvas.height = canvas.clientHeight;
+  if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
+    canvas.width = canvas.clientWidth;
+    canvas.height = canvas.clientHeight;
+  }
+
+  if (!visualizerDataArray) {
+    visualizerDataArray = new Uint8Array(analyser.frequencyBinCount);
+  }
+
+  analyser.getByteFrequencyData(visualizerDataArray);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   const bufferLength = analyser.frequencyBinCount;
-  const dataArray = new Uint8Array(bufferLength);
+  const barWidth = (canvas.width / bufferLength) * 2.5;
+  let x = 0;
 
-  function renderFrame() {
-    visualizerReq = requestAnimationFrame(renderFrame);
+  for (let i = 0; i < bufferLength; i++) {
+    const barHeight = visualizerDataArray[i];
+    const opacity = barHeight / 255;
+    const r = theme === 'dark' ? 56 : 14;
+    const g = theme === 'dark' ? 189 : 165;
+    const b = theme === 'dark' ? 248 : 233;
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
     
-    // Only render if Player tab is active to save resources
-    if (!el('player').classList.contains('active')) return;
-
-    analyser.getByteFrequencyData(dataArray);
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const barWidth = (canvas.width / bufferLength) * 2.5;
-    let barHeight;
-    let x = 0;
-
-    for (let i = 0; i < bufferLength; i++) {
-      barHeight = dataArray[i];
-
-      // Use sky blue color with dynamic opacity
-      const opacity = barHeight / 255;
-      const r = theme === 'dark' ? 56 : 14;
-      const g = theme === 'dark' ? 189 : 165;
-      const b = theme === 'dark' ? 248 : 233;
-      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
-      
-      const h = (barHeight / 255) * canvas.height;
-      ctx.fillRect(x, canvas.height - h, barWidth, h);
-
-      x += barWidth + 1;
-    }
+    const h = (barHeight / 255) * canvas.height;
+    ctx.fillRect(x, canvas.height - h, barWidth, h);
+    x += barWidth + 1;
   }
-  renderFrame();
 }
+
+function startVisualizer() {
+  if (!visualizerReq && !audioPlayer.paused && isVisualizerEnabled && analyser) {
+    renderVisualizerFrame();
+  }
+}
+
+// Attach ONE listener for play events globally
+audioPlayer.addEventListener('play', () => {
+  startVisualizer();
+});
 
 initWebAudio();
 init();
+
+// Global Keyboard Shortcuts
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+
+  switch(e.code) {
+    case 'Space':
+      e.preventDefault();
+      const playBtn = document.getElementById('btnPlay');
+      if (playBtn) playBtn.click();
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      const vsUp = el('volSlider');
+      if(vsUp) {
+        vsUp.value = Math.min(100, parseInt(vsUp.value) + 5);
+        vsUp.dispatchEvent(new Event('input'));
+      }
+      break;
+    case 'ArrowDown':
+      e.preventDefault();
+      const vsDown = el('volSlider');
+      if(vsDown) {
+        vsDown.value = Math.max(0, parseInt(vsDown.value) - 5);
+        vsDown.dispatchEvent(new Event('input'));
+      }
+      break;
+    case 'ArrowLeft':
+      e.preventDefault();
+      if (typeof audioPlayer !== 'undefined' && audioPlayer) {
+        audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 5);
+      }
+      break;
+    case 'ArrowRight':
+      e.preventDefault();
+      if (typeof audioPlayer !== 'undefined' && audioPlayer && audioPlayer.duration) {
+        audioPlayer.currentTime = Math.min(audioPlayer.duration, audioPlayer.currentTime + 5);
+      }
+      break;
+  }
+});
+
+// --- Marquee Logic ---
+function setupMarquee(container) {
+  if (!container) return false;
+  const textEl = container.querySelector('.marquee-text');
+  if (!textEl) return false;
+  
+  // Temporarily remove classes to measure true width without ::after
+  const hadAuto = container.classList.contains('marquee-auto');
+  const hadHover = container.classList.contains('has-marquee');
+  container.classList.remove('marquee-auto', 'has-marquee');
+  
+  const trueWidth = textEl.scrollWidth;
+  
+  // Set data-marquee for ::after
+  textEl.setAttribute('data-marquee', textEl.innerText);
+  
+  if (trueWidth > container.clientWidth) {
+    container.style.setProperty('--scroll-dur', `${trueWidth * 25}ms`);
+    container.classList.add('has-marquee');
+    if (hadAuto) container.classList.add('marquee-auto');
+    return true;
+  } else {
+    container.style.setProperty('--scroll-dur', `0s`);
+    container.classList.remove('has-marquee', 'marquee-auto');
+    return false;
+  }
+}
+
+document.addEventListener('mouseover', (e) => {
+  const container = e.target.closest('.marquee-container:not(.marquee-auto):not([data-measured])');
+  if (container) {
+    container.dataset.measured = '1';
+    setupMarquee(container);
+  }
+});
+
+function resetMarqueeCache() {
+  document.querySelectorAll('.marquee-container[data-measured]').forEach(el => {
+    delete el.dataset.measured;
+  });
+}
+
+// ============================================================
+// Sleep Timer
+// ============================================================
+let sleepTimerId = null;
+let sleepTimerEnd = null;
+let sleepCountdownInterval = null;
+
+function setSleepTimer(minutes) {
+  clearSleepTimer();
+  if (!minutes) return;
+  
+  sleepTimerEnd = Date.now() + minutes * 60 * 1000;
+  sleepTimerId = setTimeout(() => {
+    audioPlayer.pause();
+    clearSleepTimer();
+    showToast('Sleep timer: Playback stopped 💤');
+  }, minutes * 60 * 1000);
+
+  sleepCountdownInterval = setInterval(() => {
+    const remaining = Math.max(0, sleepTimerEnd - Date.now());
+    const m = Math.floor(remaining / 60000);
+    const s = Math.floor((remaining % 60000) / 1000);
+    const display = el('sleepTimerDisplay');
+    if (display) {
+      display.innerText = remaining > 0
+        ? `💤 ${m}:${String(s).padStart(2, '0')}`
+        : '';
+    }
+    if (remaining === 0) clearInterval(sleepCountdownInterval);
+  }, 1000);
+
+  showToast(`Sleep timer set: ${minutes} minutes`);
+}
+
+function clearSleepTimer() {
+  if (sleepTimerId) { clearTimeout(sleepTimerId); sleepTimerId = null; }
+  if (sleepCountdownInterval) { clearInterval(sleepCountdownInterval); sleepCountdownInterval = null; }
+  sleepTimerEnd = null;
+  const display = el('sleepTimerDisplay');
+  if (display) display.innerText = '';
+}
+
+el('sleepTimerSelect')?.addEventListener('change', (e) => {
+  setSleepTimer(Number(e.target.value));
+});
+
+// ============================================================
+// Crossfade Engine
+// ============================================================
+let crossfadeDuration = 3; // วินาที (0 = ปิด)
+let crossfadeTimer = null;
+
+function setCrossfadeDuration(seconds) {
+  crossfadeDuration = seconds;
+  nx.setConfig('crossfade', seconds);
+}
+
+function startCrossfade() {
+  if (!playlist.length) return;
+  const nextIdx = isShuffle && playlist.length > 1
+    ? (() => { let i; do { i = Math.floor(Math.random() * playlist.length); } while (i === currentIdx); return i; })()
+    : (currentIdx + 1) % playlist.length;
+
+  const nextAudio = new Audio(pathToSafeURL(playlist[nextIdx].path));
+  nextAudio.volume = 0;
+  nextAudio.play().catch(() => {});
+
+  const steps = 20;
+  const interval = (crossfadeDuration * 1000) / steps;
+  let step = 0;
+
+  const fade = setInterval(() => {
+    step++;
+    const t = step / steps;
+    audioPlayer.volume = Math.max(0, (1 - t) * (isMuted ? 0 : preMuteVol || 1));
+    nextAudio.volume = Math.min(1, t * (isMuted ? 0 : preMuteVol || 1));
+
+    if (step >= steps) {
+      clearInterval(fade);
+      audioPlayer.src = pathToSafeURL(playlist[nextIdx].path);
+      audioPlayer.volume = isMuted ? 0 : (preMuteVol || 1);
+      audioPlayer.play();
+      nextAudio.pause();
+      currentIdx = nextIdx;
+      loadTrackUI(nextIdx, true);
+      updatePlaylistHighlight();
+      requestSaveState();
+      crossfadeTimer = null;
+    }
+  }, interval);
+}

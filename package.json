@@ -1,17 +1,19 @@
 {
   "name": "nexus-audio",
-  "version": "2.0.1",
+  "version": "2.0.3",
   "description": "Nexus Audio - Modern music player & downloader",
-  "main": "app.js",
+  "main": "src/main/main.js",
   "author": "Punyapat",
   "license": "MIT",
   "homepage": "https://github.com/punyapat/nexus-audio",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --enable-logging",
-    "build": "electron-builder --linux",
-    "build:deb": "electron-builder --linux deb",
-    "build:appimage": "electron-builder --linux AppImage"
+    "dev:css": "tailwindcss -i ./src/tailwind.css -o ./src/renderer/css/tailwind-built.css --watch",
+    "build:css": "tailwindcss -i ./src/tailwind.css -o ./src/renderer/css/tailwind-built.css --minify",
+    "build": "npm run build:css && electron-builder --linux",
+    "build:deb": "npm run build:css && electron-builder --linux deb",
+    "build:appimage": "npm run build:css && electron-builder --linux AppImage"
   },
   "build": {
     "appId": "com.nexus.audio",
@@ -22,21 +24,13 @@
         "AppImage",
         "pacman"
       ],
-      "icon": "icon.png",
-      "category": "Audio",
+      "icon": "build/icon.png",
+      "category": "AudioVideo;Audio;Player;",
       "maintainer": "Punyapat",
       "synopsis": "Modern music player & downloader"
     },
     "files": [
-      "app.js",
-      "preload.js",
-      "index.html",
-      "styles.css",
-      "tailwind-built.css",
-      "phosphor-local.js",
-      "fonts/**/*",
-      "renderer.js",
-      "icon.png",
+      "src/**/*",
       "package.json"
     ],
     "directories": {

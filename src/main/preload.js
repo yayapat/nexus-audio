@@ -1,4 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
+let safeRoot = '';
+if (typeof location !== 'undefined' && location.protocol === 'file:') {
+  const parts = location.pathname.split('/');
+  parts.pop(); // index.html
+  parts.pop(); // renderer
+  parts.pop(); // src
+  safeRoot = 'file://' + parts.join('/') + '/';
+}
+contextBridge.exposeInMainWorld('_appRoot', safeRoot);
 
 const on = (ch, fn) => {
   const handler = (_, ...a) => fn(...a);
@@ -12,11 +21,13 @@ contextBridge.exposeInMainWorld('nexus', {
   maximize: () => ipcRenderer.send('win:maximize'),
   close: () => ipcRenderer.send('win:close'),
   toggleMiniPlayer: () => ipcRenderer.send('win:toggle-mini'),
+  toggleAlwaysOnTop: () => ipcRenderer.send('win:toggle-always-on-top'),
   onMiniPlayerChanged: (fn) => on('win:mini-changed', fn),
 
   // Dialogs
   openFiles: () => ipcRenderer.invoke('dlg:open-files'),
   openFolder: () => ipcRenderer.invoke('dlg:open-folder'),
+  resolveDrop: (paths) => ipcRenderer.invoke('dlg:resolve-drop', paths),
 
   // Player — metadata extraction via music-metadata (replaces ffmpeg cover extraction)
   extractMetadata: (fp) => {
@@ -30,12 +41,14 @@ contextBridge.exposeInMainWorld('nexus', {
   onMediaPrev: (fn) => on('media:prev', fn),
 
   // Playlist persistence
-  saveState: (d) => ipcRenderer.send('pl:save-state', d),
+  saveState: (d) => ipcRenderer.invoke('pl:save-state', d),
   loadState: () => ipcRenderer.invoke('pl:load-state'),
   saveNamedPlaylist: (n, t) => ipcRenderer.invoke('pl:save-named', n, t),
   getNamedPlaylists: () => ipcRenderer.invoke('pl:get-names'),
   loadNamedPlaylist: (n) => ipcRenderer.invoke('pl:load-named', n),
   deleteNamedPlaylist: (n) => ipcRenderer.invoke('pl:delete-named', n),
+  exportPlaylist: (tracks) => ipcRenderer.invoke('pl:export-m3u', tracks),
+  importPlaylist: () => ipcRenderer.invoke('pl:import-m3u'),
 
   // Download
   dlStart: (o) => {
@@ -45,7 +58,13 @@ contextBridge.exposeInMainWorld('nexus', {
   dlGetPath: () => ipcRenderer.invoke('dl:get-path'),
   dlChangePath: () => ipcRenderer.invoke('dl:change-path'),
   dlCheckDeps: () => ipcRenderer.invoke('dl:check-deps'),
+  checkYtdlp: () => ipcRenderer.invoke('dl:check-ytdlp'),
+  updateYtdlp: () => ipcRenderer.invoke('dl:update-ytdlp'),
   cancelDownload: (url) => ipcRenderer.send('dl:cancel', url),
+  dlGetHistory: () => ipcRenderer.invoke('dl:get-history'),
+  dlClearHistory: () => ipcRenderer.invoke('dl:clear-history'),
+  getUIPlugins: () => ipcRenderer.invoke('plugins:get-ui'),
+  dlOpenFile: (fp) => ipcRenderer.invoke('dl:open-file', fp),
   onDlLog: (fn) => on('dl:log', fn),
   onDlProgress: (fn) => on('dl:progress', fn),
   onDlSuccess: (fn) => on('dl:success', fn),
