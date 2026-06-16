@@ -50,9 +50,10 @@ input[type=range]::-webkit-slider-thumb {
 }
 input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.3); }
 input[type=range]::-webkit-slider-runnable-track {
-  width: 100%; height: 4px; cursor: pointer; background: #cbd5e1; border-radius: 2px;
+  width: 100%; height: 4px; cursor: pointer; border-radius: 2px;
+  background: linear-gradient(to right, #0ea5e9 calc(var(--val, 0) * 1% - var(--val, 0) * 0.12px + 6px), #cbd5e1 0);
 }
-.dark input[type=range]::-webkit-slider-runnable-track { background: #334155; }
+.dark input[type=range]::-webkit-slider-runnable-track { background: linear-gradient(to right, #0ea5e9 calc(var(--val, 0) * 1% - var(--val, 0) * 0.12px + 6px), #334155 0); }
 input[type=range]:disabled { opacity: 0.5; cursor: not-allowed; }
 input[type=range]:disabled::-webkit-slider-thumb { cursor: not-allowed; background: #94a3b8; box-shadow: none; }
 input[type=range]:disabled::-webkit-slider-runnable-track { cursor: not-allowed; }
@@ -182,11 +183,7 @@ input[type="checkbox"] { accent-color: #0ea5e9; }
 <span class="text-[10px] font-medium tracking-wide">Player</span>
 <div class="nav-indicator absolute -left-4 w-1 h-8 bg-sky-500 rounded-r-md transition-opacity opacity-100"></div>
 </button>
-<button id="navPlaylist" aria-label="Playlist" class="nav-item flex flex-col items-center gap-1 p-2 relative text-slate-400 dark:text-slate-500 hover:text-sky-500 dark:hover:text-sky-400 transition-all duration-300 hover:scale-105" style="-webkit-app-region: no-drag;">
-<i class="ph-fill ph-playlist text-2xl"></i>
-<span class="text-[10px] font-medium tracking-wide">Queue</span>
-<div class="nav-indicator absolute -left-4 w-1 h-8 bg-sky-500 rounded-r-md transition-opacity opacity-0"></div>
-</button>
+
 <button id="navDownloader" aria-label="Downloader" class="nav-item flex flex-col items-center gap-1 p-2 relative text-slate-400 dark:text-slate-500 hover:text-sky-500 dark:hover:text-sky-400 transition-all duration-300 hover:scale-105" style="-webkit-app-region: no-drag;">
 <i class="ph-fill ph-cloud-arrow-down text-2xl"></i>
 <span class="text-[10px] font-medium tracking-wide">Download</span>
@@ -209,10 +206,32 @@ input[type="checkbox"] { accent-color: #0ea5e9; }
 <div id="miniQueueContainer" class="relative border-r border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex flex-col shadow-[inset_-10px_0_20px_-20px_rgba(0,0,0,0.05)] select-none" style="width: 256px; transition: width 0.3s ease;">
 <div id="miniQueueContent" class="flex-1 flex flex-col w-full p-4 overflow-hidden transition-opacity duration-200">
 <div class="flex justify-between items-center mb-4">
-  <h3 class="font-bold text-slate-600 dark:text-slate-300 flex items-center gap-2 text-xs uppercase tracking-wider"><i class="ph-bold ph-list-dashes text-sky-500"></i> Up Next</h3>
-  <div id="playlistStatsMini" class="text-[10px] font-semibold text-slate-500 bg-slate-200 dark:bg-slate-700 dark:text-slate-300 px-1.5 py-0.5 rounded normal-case tracking-normal">0 Tracks</div>
+  <div class="flex items-center gap-2">
+    <div class="relative group flex justify-center">
+      <button id="btnAddFiles" class="bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-200 w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 hover:text-sky-600 transition shadow-sm"><i class="ph-bold ph-file-plus text-lg"></i></button>
+      <div class="tooltip" style="top: 120%; bottom: auto;">Add Files</div>
+    </div>
+    <div class="relative group flex justify-center">
+      <button id="btnAddFolder" class="bg-sky-50 dark:bg-sky-900 border border-sky-100 dark:border-sky-800 text-sky-600 dark:text-sky-300 w-8 h-8 flex items-center justify-center rounded-lg hover:bg-sky-100 dark:hover:bg-sky-800 transition shadow-sm"><i class="ph-bold ph-folder-plus text-lg"></i></button>
+      <div class="tooltip" style="top: 120%; bottom: auto;">Add Folder</div>
+    </div>
+  </div>
+  <div class="relative group flex justify-center">
+    <button id="btnClearPl" class="bg-red-50 dark:bg-red-900 border border-red-100 dark:border-red-800 text-red-600 dark:text-red-300 w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-100 dark:hover:bg-red-800 transition shadow-sm"><i class="ph-bold ph-trash text-lg"></i></button>
+    <div class="tooltip" style="top: 120%; bottom: auto;">Clear Queue</div>
+  </div>
 </div>
-<div id="miniQueueList" class="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5 pt-2" style="padding-bottom: 120px;">
+<!-- Search Input -->
+<div class="relative w-full mb-3">
+  <i class="ph-bold ph-magnifying-glass absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400"></i>
+  <input type="text" id="plSearch" placeholder="Search..." aria-label="Search tracks" class="w-full bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg pl-9 pr-3 py-1.5 text-xs outline-none focus:border-sky-400 dark:text-white">
+</div>
+<!-- Stats & Sort -->
+<div class="flex justify-between items-center mb-2">
+  <div id="playlistStatsMain" class="text-[10px] font-semibold text-slate-500 bg-slate-200 dark:bg-slate-700 dark:text-slate-300 px-1.5 py-0.5 rounded">0 Tracks</div>
+  <button id="btnSort" class="text-slate-500 hover:text-sky-500 transition text-sm p-1" title="Sort by Folder/Name"><i class="ph-bold ph-sort-ascending"></i></button>
+</div>
+<div id="trackList" class="hover-scrollbar flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5 pt-1 scroll-smooth" style="scroll-padding-bottom: 60px;">
 </div>
 </div>
 <!-- ปุ่ม Toggle พับ/ขยายคิว -->
@@ -245,17 +264,17 @@ input[type="checkbox"] { accent-color: #0ea5e9; }
 <div class="w-full flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400 font-medium font-mono relative px-2">
 <span id="currentTimeText" class="flex-shrink-0 w-10 text-right">00:00</span>
 <div class="flex-1 relative flex items-center h-4 group min-w-0 shrink" id="progressContainer">
-  <input type="range" id="progressBar" min="0" max="100" value="0" aria-label="Seek" class="w-full time-slider absolute z-10" disabled>
+  <input type="range" id="progressBar" min="0" max="100" step="any" value="0" aria-label="Seek" class="w-full time-slider absolute z-10" disabled>
 </div>
 <div id="seekTooltip" class="hidden absolute -top-8 bg-slate-800 dark:bg-white text-white dark:text-slate-800 text-[10px] px-2 py-1 rounded shadow-md pointer-events-none z-20 transform -translate-x-1/2">00:00</div>
 <span id="totalTimeText" class="flex-shrink-0 w-10 text-left">00:00</span>
 </div>
 
 <!-- แถวปุ่มควบคุม และ Volume -->
-<div class="w-full grid grid-cols-[auto_1fr_auto] items-center gap-2 px-2">
+<div class="w-full flex flex-wrap justify-center items-center gap-x-8 gap-y-6 px-2 max-w-3xl mx-auto">
 
 <!-- ฝั่งซ้าย: Shuffle & Loop -->
-<div class="flex items-center gap-1 justify-start flex-shrink-0">
+<div class="flex items-center gap-2 justify-center shrink-0">
 <div class="relative group flex justify-center">
 <button id="btnShuffle" aria-label="Shuffle" class="text-slate-400 hover:text-sky-500 transition transform hover:scale-110 p-1"><i class="ph-bold ph-shuffle text-xl"></i></button>
 <div class="tooltip">Shuffle</div>
@@ -267,7 +286,7 @@ input[type="checkbox"] { accent-color: #0ea5e9; }
 </div>
 
 <!-- ตรงกลาง: Playback -->
-<div class="flex items-center gap-3 justify-center min-w-0 shrink">
+<div class="flex items-center gap-4 justify-center shrink-0">
 <div class="relative group flex justify-center">
 <button id="btnPrev" aria-label="Previous track" class="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition transform hover:-translate-x-1"><i class="ph-fill ph-skip-back text-[32px]"></i></button>
 <div class="tooltip">Previous</div>
@@ -287,19 +306,19 @@ input[type="checkbox"] { accent-color: #0ea5e9; }
 </div>
 
 <!-- ฝั่งขวา: Auto-Next & Volume แนวนอน -->
-<div class="flex items-center gap-1 justify-end flex-shrink-0">
+<div class="flex items-center gap-2 justify-center shrink-0">
 <div class="relative group flex justify-center">
 <button id="btnAutoNext" aria-label="Auto next" class="text-slate-400 hover:text-sky-500 transition transform hover:scale-110 p-1"><i class="ph-bold ph-fast-forward text-xl"></i></button>
 <div class="tooltip" id="autoNextTooltip">Auto-Next: ON</div>
 </div>
 
-<div class="flex items-center gap-1 justify-end w-24 sm:w-32 ml-4">
+<div class="flex items-center gap-2 justify-center w-28 sm:w-32 ml-2">
 <div class="relative group flex justify-center">
 <button id="btnMute" aria-label="Mute" class="ctrl-btn text-slate-500 dark:text-slate-400 hover:text-sky-500 transition p-1"><i id="muteIcon" class="ph-fill ph-speaker-high text-lg"></i></button>
 <div class="tooltip" id="muteTooltip">Mute</div>
 </div>
 <div class="relative group flex items-center flex-1">
-<input type="range" id="volSlider" min="0" max="100" value="100" aria-label="Volume" class="w-full vol-slider-custom">
+<input type="range" id="volSlider" min="0" max="100" step="any" value="100" aria-label="Volume" class="w-full vol-slider-custom">
 <div class="tooltip" id="volTooltip">100%</div>
 </div>
 </div>
@@ -311,64 +330,7 @@ input[type="checkbox"] { accent-color: #0ea5e9; }
 </div>
 
 
-<!-- TAB 2: Playlist -->
-<div id="playlist" class="tab-content flex-col h-full w-full p-10">
-<div class="flex justify-between items-end mb-4">
-<div>
-<h2 class="text-3xl font-bold text-slate-800 dark:text-white">Queue & Library</h2>
-<p class="text-slate-400 text-sm mt-1">Manage your music</p>
-</div>
-<div class="flex gap-2">
-<button id="btnAddFiles" class="bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-200 px-4 py-2 rounded-xl font-semibold hover:bg-slate-50 dark:hover:bg-slate-600 hover:text-sky-600 transition shadow-sm">
-<i class="ph-bold ph-file-plus"></i> Files
-</button>
-<button id="btnAddFolder" class="bg-sky-50 dark:bg-sky-900 border border-sky-100 dark:border-sky-800 text-sky-600 dark:text-sky-300 px-4 py-2 rounded-xl font-semibold hover:bg-sky-100 dark:hover:bg-sky-800 transition shadow-sm">
-<i class="ph-bold ph-folder-plus"></i> Folder
-</button>
-<button id="btnSavePl" class="bg-indigo-50 dark:bg-indigo-900 border border-indigo-100 dark:border-indigo-800 text-indigo-600 dark:text-indigo-300 px-4 py-2 rounded-xl font-semibold hover:bg-indigo-100 dark:hover:bg-indigo-800 transition shadow-sm">
-<i class="ph-bold ph-floppy-disk"></i> Save
-</button>
-<button id="btnExportPl" class="bg-purple-50 dark:bg-purple-900 border border-purple-100 dark:border-purple-800 text-purple-600 dark:text-purple-300 px-4 py-2 rounded-xl font-semibold hover:bg-purple-100 dark:hover:bg-purple-800 transition shadow-sm" title="Export to .m3u">
-<i class="ph-bold ph-export"></i> Export
-</button>
-<button id="btnImportPl" class="bg-teal-50 dark:bg-teal-900 border border-teal-100 dark:border-teal-800 text-teal-600 dark:text-teal-300 px-4 py-2 rounded-xl font-semibold hover:bg-teal-100 dark:hover:bg-teal-800 transition shadow-sm" title="Import from .m3u">
-<i class="ph-bold ph-download-simple"></i> Import
-</button>
-<button id="btnClearPl" class="bg-red-50 dark:bg-red-900 border border-red-100 dark:border-red-800 text-red-600 dark:text-red-300 px-4 py-2 rounded-xl font-semibold hover:bg-red-100 dark:hover:bg-red-800 transition shadow-sm">
-<i class="ph-bold ph-trash"></i> Clear
-</button>
-</div>
-</div>
 
-<div class="flex items-center gap-4 mb-4">
-<div class="relative flex-1 max-w-sm flex items-center gap-2">
-  <div class="relative flex-1">
-    <i class="ph-bold ph-magnifying-glass absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400"></i>
-    <input type="text" id="plSearch" placeholder="Search track, artist, or folder..." aria-label="Search tracks" class="w-full bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg pl-9 pr-4 py-2 text-sm outline-none focus:border-sky-400 dark:text-white">
-  </div>
-  <button id="btnSort" class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 px-3 py-2 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 shadow-sm flex items-center gap-2 transition" title="จัดเรียงตามโฟลเดอร์">
-    <i class="ph-bold ph-sort-ascending"></i> Sort
-  </button>
-</div>
-<div id="namedPlaylists" class="flex gap-2 overflow-x-auto pb-2 flex-1">
-  <!-- Named playlists will go here -->
-</div>
-</div>
-
-<div class="flex items-center justify-between mb-2 px-3">
-  <div class="flex flex-col gap-1">
-    <div id="playlistStatsMain" class="text-xs font-semibold text-slate-500 bg-slate-200 dark:bg-slate-700 dark:text-slate-300 px-2 py-1 rounded w-max">0 Tracks • 0 Folders</div>
-    <label class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 cursor-pointer mt-1">
-      <input type="checkbox" id="selectAll"> Select All
-    </label>
-  </div>
-  <button id="btnDeleteSelected" class="hidden text-xs bg-red-500 text-white px-3 py-1 rounded shadow hover:bg-red-600 transition">Delete Selected</button>
-</div>
-
-<div id="trackList" class="flex-1 overflow-y-auto pr-2 relative flex flex-col gap-2 pt-2 min-h-full" style="padding-bottom: 120px;">
-<!-- Tracks -->
-</div>
-</div>
 
 <!-- TAB 3: Downloader -->
 <div id="downloader" class="tab-content flex-col h-full w-full p-10">

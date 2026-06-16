@@ -1,6 +1,7 @@
-/* ============================================================
-   Nexus Audio — Premium Stylesheet
-   ============================================================ */
+/* ponytail: Add spacing to last item to prevent cutoff */
+.track-item:last-child { margin-bottom: 70px !important; }
+
+
 
 @import url('./fonts/outfit.css');
 
@@ -192,20 +193,7 @@ a { text-decoration: none; color: inherit; }
 }
 #tab-player.active { display: flex; }
 
-/* Mini-queue sidebar (left) */
-.player-queue {
-  width: 260px;
-  min-width: 200px;
-  max-width: 360px;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  transition: width var(--transition);
-  overflow: hidden;
-}
 
-.player-queue.collapsed { width: 0; min-width: 0; border-right: none; }
 
 .pq-header {
   display: flex;
@@ -1082,7 +1070,6 @@ a { text-decoration: none; color: inherit; }
 
 /* ── Mini Player ───────────────────────────────────────────── */
 body.mini-player #sidebar,
-body.mini-player #tab-player .player-queue,
 body.mini-player .song-info,
 body.mini-player .volume-section { display: none !important; }
 
@@ -1153,26 +1140,10 @@ body.mini-player .ctrl-btn.shuffle-btn,
 body.mini-player .ctrl-btn.loop-btn,
 body.mini-player .ctrl-btn.auto-next-btn { display: none; }
 
-/* ── Animations ────────────────────────────────────────────── */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
-}
 
-.fade-in { animation: fadeIn 0.3s ease forwards; }
-.slide-up { animation: slideUp 0.4s ease forwards; }
 
 /* ── Responsive (mini-widths etc.) ─────────────────────────── */
 @media (max-width: 700px) {
-  .player-queue { display: none; }
   .album-cover-wrap { width: 200px; height: 200px; }
 }
 

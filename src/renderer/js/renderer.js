@@ -10,10 +10,35 @@ let isAutoNext = true;
 let isDraggingSlider = false;
 
 class LRUMap extends Map {
-  constructor(maxSize = 2000) { super(); this.maxSize = maxSize; }
+  constructor(maxSize = 100000) { super(); this.maxSize = maxSize; }
   set(k, v) { super.set(k, v); if (this.size > this.maxSize) this.delete(this.keys().next().value); return this; }
 }
-let metadataCache = new LRUMap(2000);
+
+async function backgroundFetchMeta(list, session = null) {
+  if (!list.length) return;
+  let batchCount = 0;
+  for (const t of list) {
+    if (session !== null && loadSessionId !== session) break;
+    if (!metadataCache.has(t.path)) {
+      try {
+        const meta = await nx.extractMetadata(t.path);
+        metadataCache.set(t.path, meta);
+      } catch (e) { console.error(e); continue; }
+      
+      batchCount++;
+      if (batchCount % 10 === 0) {
+        clearTimeout(window.initRenderTimeout);
+        window.initRenderTimeout = setTimeout(() => renderAllPlaylists(), 100);
+      }
+    }
+  }
+  if (batchCount > 0) {
+    clearTimeout(window.initRenderTimeout);
+    window.initRenderTimeout = setTimeout(() => renderAllPlaylists(), 100);
+  }
+}
+
+let metadataCache = new LRUMap(100000);
 let theme = 'light';
 let downloadQueue = [];
 let isVisualizerEnabled = true;
@@ -49,6 +74,7 @@ async function init() {
 
     audioPlayer.volume = await nx.getConfig('volume') ?? 1;
     el('volSlider').value = audioPlayer.volume * 100;
+    el('volSlider').style.setProperty('--val', audioPlayer.volume * 100);
     updateVolIcon(audioPlayer.volume);
     
     const volTooltip = el('volTooltip');
@@ -83,22 +109,9 @@ async function init() {
       }
     
       // Background metadata fetch for all loaded tracks
-      if (playlist.length > 0) {
-        for (const t of playlist) {
-          if (!metadataCache.has(t.path)) {
-            nx.extractMetadata(t.path).then(meta => {
-              metadataCache.set(t.path, meta);
-              clearTimeout(window.initRenderTimeout);
-              window.initRenderTimeout = setTimeout(() => renderAllPlaylists(), 300);
-            }).catch(err => {
-              console.error('Failed to extract metadata for', t.path, err);
-            });
-          }
-        }
-      }
+      backgroundFetchMeta(playlist);
     }
 
-    loadNamedPlaylists();
 
     const p = await nx.dlGetPath();
     el('dlPathText').innerText = p;
@@ -218,7 +231,6 @@ function switchTab(tabId) {
 }
 
 el('navPlayer').onclick = () => switchTab('player');
-el('navPlaylist').onclick = () => switchTab('playlist');
 el('navDownloader').onclick = () => switchTab('downloader');
 el('navSettings').onclick = () => switchTab('settings');
 
@@ -297,16 +309,21 @@ const escapeHtml = (str) => {
   return str.toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 };
 
-audioPlayer.addEventListener('timeupdate', () => {
-  if(isDraggingSlider || !audioPlayer.duration) return;
-
+let rAFId = null;
+function updateProgressUI() {
+  if (!audioPlayer.paused) rAFId = requestAnimationFrame(updateProgressUI);
+  if (isDraggingSlider || !audioPlayer.duration) return;
   const cur = audioPlayer.currentTime;
   const tot = audioPlayer.duration;
   el('currentTimeText').innerText = formatTime(cur);
   el('totalTimeText').innerText = formatTime(tot);
   const percent = (cur / tot) * 100;
   progBar.value = percent;
-  progBar.style.setProperty('--val', `${percent}%`);
+  progBar.style.setProperty('--val', percent);
+}
+
+audioPlayer.addEventListener('timeupdate', () => {
+  if (audioPlayer.paused) updateProgressUI();
 });
 
 audioPlayer.addEventListener('ended', () => {
@@ -326,8 +343,15 @@ audioPlayer.addEventListener('play', () => {
   isPlaying = true; 
   errorCount = 0; 
   updatePlayPauseUI(); 
+  if (rAFId) cancelAnimationFrame(rAFId);
+  rAFId = requestAnimationFrame(updateProgressUI);
 });
-audioPlayer.addEventListener('pause', () => { isPlaying = false; updatePlayPauseUI(); });
+audioPlayer.addEventListener('pause', () => { 
+  isPlaying = false; 
+  updatePlayPauseUI(); 
+  if (rAFId) cancelAnimationFrame(rAFId);
+  updateProgressUI();
+});
 audioPlayer.addEventListener('error', (e) => {
   const err = e.target.error;
   const fileName = playlist[currentIdx] ? getFilename(playlist[currentIdx].path) : 'Unknown file';
@@ -417,14 +441,14 @@ const volSlider = el('volSlider');
 // Volume input listener is below in the Volume section
 
 // Update initial vol slider CSS var
-volSlider.style.setProperty('--val', `${volSlider.value}%`);
+volSlider.style.setProperty('--val', volSlider.value);
 
 progBar.addEventListener('mousedown', () => isDraggingSlider = true);
 progBar.addEventListener('input', () => {
   if (!audioPlayer.duration) return;
   const time = (progBar.value / 100) * audioPlayer.duration;
   el('currentTimeText').innerText = formatTime(time);
-  progBar.style.setProperty('--val', `${progBar.value}%`);
+  progBar.style.setProperty('--val', progBar.value);
 });
 progBar.addEventListener('change', () => {
   if (audioPlayer.duration) audioPlayer.currentTime = (progBar.value / 100) * audioPlayer.duration;
@@ -482,7 +506,7 @@ el('btnAutoNext').onclick = () => { isAutoNext = !isAutoNext; updateControlState
 el('volSlider').addEventListener('input', (e) => {
   const vol = e.target.value / 100;
   audioPlayer.volume = vol;
-  volSlider.style.setProperty('--val', `${volSlider.value}%`);
+  volSlider.style.setProperty('--val', volSlider.value);
   
   const volTooltip = el('volTooltip');
   if (volTooltip) volTooltip.innerText = `${Math.round(vol * 100)}%`;
@@ -540,7 +564,7 @@ el('btnMute').onclick = () => {
     const volTooltip = el('volTooltip');
     if (volTooltip) volTooltip.innerText = '0%';
   }
-  volSlider.style.setProperty('--val', `${volSlider.value}%`);
+  volSlider.style.setProperty('--val', volSlider.value);
 };
 
 function updateVolIcon(vol) {
@@ -643,7 +667,7 @@ function playTrack(idx) {
     showToast(`Failed to play: ${getFilename(track.path)}`);
   });
   
-  progBar.style.setProperty('--val', '0%');
+  progBar.style.setProperty('--val', 0);
   loadTrackUI(idx, true);
   requestSaveState();
   updatePlaylistHighlight();
@@ -722,24 +746,7 @@ async function addFiles(paths, autoplay = false) {
   }
 
   // Parallel metadata fetch with concurrency limit
-  const BATCH = 5;
-  for (let i = 0; i < newPaths.length; i += BATCH) {
-    if (loadSessionId !== currentSession) break; // Abort if cleared during load
-    
-    const batch = newPaths.slice(i, i + BATCH).filter(p => !metadataCache.has(p));
-    await Promise.allSettled(batch.map(async (p) => {
-      try {
-        const meta = await nx.extractMetadata(p);
-        metadataCache.set(p, meta);
-      } catch (err) {
-        console.error('Metadata fetch failed:', p, err);
-      }
-    }));
-    
-    if (loadSessionId === currentSession) {
-      renderAllPlaylists();
-    }
-  }
+  backgroundFetchMeta(newPaths.map(p => ({path: p})), currentSession);
 }
 
 el('btnAddFiles').onclick = async () => {
@@ -759,7 +766,8 @@ el('btnClearPl').onclick = () => {
   playlist = [];
   currentIdx = -1;
   audioPlayer.pause();
-  audioPlayer.src = '';
+  audioPlayer.removeAttribute('src');
+  audioPlayer.load();
   el('fsTitle').innerText = 'No track playing';
   el('fsArtist').innerText = 'Ready to play';
   el('albumCover').classList.add('hidden');
@@ -773,25 +781,7 @@ el('btnClearPl').onclick = () => {
   requestSaveState();
 };
 
-// Export button
-el('btnExportPl')?.addEventListener('click', async () => {
-  if (!playlist.length) return showToast('Playlist is empty');
-  const tracks = playlist.map(t => {
-    const meta = metadataCache.get(t.path) || {};
-    return { path: t.path, title: meta.title, artist: meta.artist, duration: meta.duration };
-  });
-  const saved = await nx.exportPlaylist(tracks);
-  if (saved) showToast('Playlist exported: ' + saved);
-});
 
-// Import button
-el('btnImportPl')?.addEventListener('click', async () => {
-  const paths = await nx.importPlaylist();
-  if (paths?.length) {
-    await addFiles(paths, false);
-    showToast(`Imported ${paths.length} tracks`);
-  }
-});
 
 window.removeTrack = (idx, event, skipRender = false) => {
   if (event) event.stopPropagation();
@@ -809,34 +799,6 @@ window.removeTrack = (idx, event, skipRender = false) => {
     renderAllPlaylists();
     requestSaveState();
   }
-};
-
-// --- Bulk Delete & Select ---
-el('selectAll').onchange = (e) => {
-  const checked = e.target.checked;
-  document.querySelectorAll('.pl-check').forEach(cb => cb.checked = checked);
-  updateDeleteBtn();
-};
-
-function updateDeleteBtn() {
-  const checked = document.querySelectorAll('.pl-check:checked');
-  if (checked.length > 0) {
-    el('btnDeleteSelected').classList.remove('hidden');
-    el('btnDeleteSelected').innerText = `Delete (${checked.length})`;
-  } else {
-    el('btnDeleteSelected').classList.add('hidden');
-    el('selectAll').checked = false;
-  }
-}
-
-el('btnDeleteSelected').onclick = () => {
-  const checkboxes = document.querySelectorAll('.pl-check:checked');
-  const indices = Array.from(checkboxes).map(cb => parseInt(cb.dataset.idx)).sort((a,b) => b-a);
-  indices.forEach(idx => removeTrack(idx, null, true));
-  renderAllPlaylists();
-  requestSaveState();
-  el('selectAll').checked = false;
-  updateDeleteBtn();
 };
 
 // --- Rendering Lists ---
@@ -881,56 +843,20 @@ el('btnSort')?.addEventListener('click', () => {
 });
 
 function updatePlaylistHighlight() {
-  const allMainItems = el('trackList').querySelectorAll('.track-item');
-  const allMiniItems = el('miniQueueList').querySelectorAll('.track-item');
+  const items = el('trackList').children;
+  if (items.length !== playlist.length) return renderAllPlaylists();
   
-  if (allMainItems.length > 0 && allMainItems.length === playlist.length) {
-    allMainItems.forEach((pItem, idx) => {
-      const isActive = (idx === currentIdx);
-      
-      // Update Main Item
-      if (isActive) {
-        pItem.className = 'track-item flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all duration-300 border hover:-translate-y-0.5 hover:shadow-md bg-sky-50/50 dark:bg-sky-900/30 border-sky-200 dark:border-sky-800 shadow-sm';
-        const titleEl = pItem.querySelector('h4');
-        if (titleEl) titleEl.className = 'font-semibold text-sm truncate text-sky-700 dark:text-sky-400';
-        const iconEl = pItem.querySelector('i');
-        if (iconEl && iconEl.classList.contains('ph-music-note')) {
-          iconEl.className = 'ph-fill ph-waveform animate-pulse text-lg';
-        }
-      } else {
-        pItem.className = 'track-item flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all duration-300 border hover:-translate-y-0.5 hover:shadow-md bg-white dark:bg-slate-800 border-transparent hover:border-slate-200 dark:hover:border-slate-600';
-        const titleEl = pItem.querySelector('h4');
-        if (titleEl) titleEl.className = 'font-semibold text-sm truncate text-slate-700 dark:text-slate-200';
-        const iconEl = pItem.querySelector('i.ph-waveform');
-        if (iconEl) {
-          iconEl.className = 'ph-fill ph-music-note text-lg';
-        }
-      }
-      
-      // Update Mini Item
-      const mItem = allMiniItems[idx];
-      if (mItem) {
-        if (isActive) {
-          mItem.className = 'track-item flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors bg-sky-100/60 dark:bg-sky-900/50 border border-sky-200 dark:border-sky-700';
-          const mTitle = mItem.querySelector('h4');
-          if (mTitle) mTitle.className = 'marquee-text font-semibold text-xs text-sky-700 dark:text-sky-300';
-          const mIcon = mItem.querySelector('i');
-          if (mIcon && mIcon.classList.contains('ph-music-note')) {
-            mIcon.className = 'ph-fill ph-waveform text-sky-500 animate-pulse text-sm pointer-events-none';
-          }
-        } else {
-          mItem.className = 'track-item flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors hover:bg-slate-100 dark:hover:bg-slate-700 border border-transparent';
-          const mTitle = mItem.querySelector('h4');
-          if (mTitle) mTitle.className = 'marquee-text font-semibold text-xs text-slate-600 dark:text-slate-300';
-          const mIcon = mItem.querySelector('i.ph-waveform');
-          if (mIcon) {
-            mIcon.className = 'ph-fill ph-music-note text-slate-400 text-sm pointer-events-none';
-          }
-        }
-      }
-    });
-  } else {
-    renderAllPlaylists();
+  for (const item of el('trackList').querySelectorAll('.is-active')) {
+    item.className = 'track-item group flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors hover:bg-slate-100 dark:hover:bg-slate-700 border border-transparent';
+    item.querySelector('h4').className = 'marquee-text font-semibold text-xs text-slate-600 dark:text-slate-300';
+    item.querySelector('i.ph-fill').className = 'ph-fill ph-music-note text-slate-400 text-sm pointer-events-none';
+  }
+  
+  if (currentIdx >= 0 && currentIdx < items.length) {
+    const curr = items[currentIdx];
+    curr.className = 'track-item is-active group flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors bg-sky-100/60 dark:bg-sky-900/50 border border-sky-200 dark:border-sky-700';
+    curr.querySelector('h4').className = 'marquee-text font-semibold text-xs text-sky-700 dark:text-sky-300';
+    curr.querySelector('i.ph-fill').className = 'ph-fill ph-waveform text-sky-500 animate-pulse text-sm pointer-events-none';
   }
 }
 
@@ -939,77 +865,33 @@ function buildTrackElement(item, idx, meta, isActive) {
   const artist = meta.artist || 'Unknown Artist';
   
   const pItem = document.createElement('div');
-  pItem.className = `track-item flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all duration-300 border hover:-translate-y-0.5 hover:shadow-md ${isActive ? 'bg-sky-50/50 dark:bg-sky-900/30 border-sky-200 dark:border-sky-800 shadow-sm' : 'bg-white dark:bg-slate-800 border-transparent hover:border-slate-200 dark:hover:border-slate-600'}`;
+  pItem.className = `track-item group flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${isActive ? 'is-active bg-sky-100/60 dark:bg-sky-900/50 border border-sky-200 dark:border-sky-700' : 'hover:bg-slate-100 dark:hover:bg-slate-700 border border-transparent'}`;
   pItem.draggable = true;
-  
-  const coverHtml = meta.cover ? `<img src="${meta.cover}" class="w-full h-full object-cover">` : `<i class="ph-fill ${isActive ? 'ph-waveform animate-pulse' : 'ph-music-note'} text-lg"></i>`;
 
   pItem.innerHTML = `
-    <div class="flex items-center gap-4 overflow-hidden w-full">
-      <i class="ph-bold ph-dots-six-vertical text-slate-300 hover:text-slate-500 cursor-grab text-xl"></i>
-      <input type="checkbox" class="pl-check" data-idx="${idx}" onclick="event.stopPropagation()">
-      <div class="w-10 h-10 rounded-lg overflow-hidden flex items-center justify-center shrink-0 ${isActive && !meta.cover ? 'bg-sky-500 text-white shadow-md shadow-sky-200' : 'bg-slate-100 dark:bg-slate-700 text-slate-400'}">
-        ${coverHtml}
+    <i class="ph-fill ${isActive ? 'ph-waveform text-sky-500 animate-pulse' : 'ph-music-note text-slate-400'} text-sm pointer-events-none"></i>
+    <div class="flex flex-col flex-1 min-w-0 overflow-hidden pointer-events-none">
+      <div class="marquee-container">
+        <h4 class="marquee-text font-semibold text-xs ${isActive ? 'text-sky-700 dark:text-sky-300' : 'text-slate-600 dark:text-slate-300'}">${escapeHtml(name)}</h4>
       </div>
-      <div class="truncate flex-1 pointer-events-none">
-        <h4 class="font-semibold text-sm truncate ${isActive ? 'text-sky-700 dark:text-sky-400' : 'text-slate-700 dark:text-slate-200'}">${escapeHtml(name)}</h4>
-        <div class="flex items-center gap-1 text-xs text-slate-400 truncate">
-          <span class="truncate max-w-[50%]">${escapeHtml(artist)}</span>
-          <span class="text-[10px] opacity-50">•</span>
-          <i class="ph-fill ph-folder text-[10px] opacity-70"></i>
-          <span class="truncate text-[10px] opacity-80">${escapeHtml(getFolderName(item.path))}</span>
-        </div>
+      <div class="flex items-center gap-1 text-[10px] text-slate-400 truncate">
+        <span class="truncate max-w-[60%]">${escapeHtml(artist)}</span>
+        <span class="opacity-50">•</span>
+        <span class="truncate opacity-80">${escapeHtml(getFolderName(item.path))}</span>
       </div>
     </div>
-    <div class="flex items-center gap-3 shrink-0">
-      <span class="text-xs text-slate-400 font-mono">${formatTime(meta.duration)}</span>
-      <button class="text-slate-300 hover:text-red-500 p-2 opacity-0 hover:opacity-100 transition"><i class="ph-bold ph-trash text-lg pointer-events-none"></i></button>
-    </div>
+    <button class="text-slate-300 hover:text-red-500 p-1 opacity-0 group-hover:opacity-100 hover:opacity-100 transition shrink-0 z-10"><i class="ph-bold ph-trash text-sm pointer-events-none"></i></button>
   `;
-  pItem.ondblclick = () => playTrack(idx);
+  pItem.classList.add('group');
+  pItem.onclick = () => playTrack(idx);
   pItem.oncontextmenu = (e) => showTrackContextMenu(e, idx);
   pItem.querySelector('button').onclick = (e) => removeTrack(idx, e);
-  pItem.querySelector('.pl-check').onchange = updateDeleteBtn;
   attachDragHandlers(pItem, idx);
   
   return pItem;
 }
 
-function renderMiniQueue() {
-  const miniContainer = el('miniQueueList');
-  miniContainer.innerHTML = '';
-  if (!playlist.length) {
-    miniContainer.innerHTML = '<div class="text-center text-slate-400 mt-10 text-xs italic">Queue is empty</div>';
-    return;
-  }
-  playlist.forEach((item, idx) => {
-    const meta = metadataCache.get(item.path) || {};
-    const name = meta.title || getFilename(item.path);
-    const artist = meta.artist || 'Unknown Artist';
-    const isActive = (idx === currentIdx);
 
-    const mItem = document.createElement('div');
-    mItem.className = `track-item flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${isActive ? 'bg-sky-100/60 dark:bg-sky-900/50 border border-sky-200 dark:border-sky-700' : 'hover:bg-slate-100 dark:hover:bg-slate-700 border border-transparent'}`;
-    mItem.draggable = true;
-    mItem.innerHTML = `
-      <i class="ph-fill ${isActive ? 'ph-waveform text-sky-500 animate-pulse' : 'ph-music-note text-slate-400'} text-sm pointer-events-none"></i>
-      <div class="flex flex-col flex-1 min-w-0 overflow-hidden pointer-events-none">
-        <div class="marquee-container">
-          <h4 class="marquee-text font-semibold text-xs ${isActive ? 'text-sky-700 dark:text-sky-300' : 'text-slate-600 dark:text-slate-300'}">${escapeHtml(name)}</h4>
-        </div>
-        <div class="flex items-center gap-1 text-[10px] text-slate-400 truncate">
-          <span class="truncate max-w-[60%]">${escapeHtml(artist)}</span>
-          <span class="opacity-50">•</span>
-          <span class="truncate opacity-80">${escapeHtml(getFolderName(item.path))}</span>
-        </div>
-      </div>
-    `;
-    mItem.onclick = () => playTrack(idx);
-    mItem.oncontextmenu = (e) => showTrackContextMenu(e, idx);
-    attachDragHandlers(mItem, idx);
-    miniContainer.appendChild(mItem);
-  });
-}
 
 let contextMenuTargetIdx = -1;
 const ctxMenu = el('trackContextMenu');
@@ -1088,22 +970,15 @@ function renderAllPlaylists() {
     container.appendChild(list);
   }
 
-  renderMiniQueue();
-
   const totalTracks = playlist.length;
   const uniqueFolders = new Set(playlist.map(t => {
     const parts = t.path.split(/[/\\]/);
     parts.pop();
     return parts.join('/');
   })).size;
-  const tracksText = `${totalTracks} เพลง`;
-  const foldersText = totalTracks > 0 ? ` • ${uniqueFolders} โฟลเดอร์` : '';
+  const tracksText = `${totalTracks} Tracks`;
   const mainStatsEl = el('playlistStatsMain');
-  if (mainStatsEl) mainStatsEl.innerText = `${tracksText}${foldersText}`;
-  const miniStatsEl = el('playlistStatsMini');
-  if (miniStatsEl) miniStatsEl.innerText = tracksText;
-
-  updateDeleteBtn();
+  if (mainStatsEl) mainStatsEl.innerText = `${tracksText}`;
 }
 
 // --- Drag & Drop Reordering ---
@@ -1164,79 +1039,7 @@ function attachDragHandlers(el, idx) {
 
 
 
-// --- Named Playlists ---
-function showInputModal(title, placeholder = '') {
-  return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'fixed inset-0 bg-black/40 z-50 flex items-center justify-center';
-    overlay.innerHTML = `
-      <div class="bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-2xl w-80">
-        <h3 class="font-semibold text-slate-700 dark:text-slate-200 mb-3">${escapeHtml(title)}</h3>
-        <input id="_modalInput" type="text" placeholder="${escapeHtml(placeholder)}"
-          class="w-full border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-2 
-                 text-sm dark:bg-slate-700 dark:text-white outline-none focus:ring-2 
-                 focus:ring-sky-400 mb-4">
-        <div class="flex gap-2 justify-end">
-          <button id="_modalCancel" class="px-4 py-1.5 text-sm text-slate-500 
-                  hover:text-slate-700 rounded-lg">Cancel</button>
-          <button id="_modalOk" class="px-4 py-1.5 text-sm bg-sky-500 text-white 
-                  rounded-lg hover:bg-sky-600">Save</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-    const input = overlay.querySelector('#_modalInput');
-    setTimeout(() => input.focus(), 50);
-    const submit = () => { resolve(input.value.trim()); overlay.remove(); };
-    const cancel = () => { resolve(null); overlay.remove(); };
-    overlay.querySelector('#_modalOk').onclick = submit;
-    overlay.querySelector('#_modalCancel').onclick = cancel;
-    input.onkeydown = (e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') cancel(); };
-    overlay.onclick = (e) => { if (e.target === overlay) cancel(); };
-  });
-}
 
-el('btnSavePl').onclick = async () => {
-  if (!playlist.length) return;
-  const name = await showInputModal('Save Playlist', 'Playlist name...');
-  if (name) {
-    await nx.saveNamedPlaylist(name, playlist);
-    loadNamedPlaylists();
-  }
-};
-
-async function loadNamedPlaylists() {
-  const pls = await nx.getNamedPlaylists();
-  const cont = el('namedPlaylists');
-  cont.innerHTML = '';
-  pls.forEach(pl => {
-    const p = document.createElement('div');
-    p.className = 'flex items-center gap-1 bg-sky-50 dark:bg-sky-900 border border-sky-100 dark:border-sky-800 text-sky-600 dark:text-sky-300 px-3 py-1.5 rounded-full text-xs font-semibold cursor-pointer hover:bg-sky-100 dark:hover:bg-sky-800 transition whitespace-nowrap';
-    p.innerHTML = `
-      <i class="ph-fill ph-playlist"></i>
-      <span>${escapeHtml(pl.name)}</span>
-      <span class="bg-sky-100 dark:bg-sky-700 px-1.5 rounded-full text-[10px]">${pl.count}</span>
-      <i class="ph-bold ph-x ml-1 hover:text-red-500 delete-btn" title="Delete"></i>
-    `;
-    p.onclick = async (e) => {
-      if (e.target.classList.contains('delete-btn')) {
-        await nx.deleteNamedPlaylist(pl.name);
-        loadNamedPlaylists();
-      } else {
-        const loadedTracks = await nx.loadNamedPlaylist(pl.name);
-        playlist = (loadedTracks || []).map(t => ({
-          id: t.id || crypto.randomUUID(),
-          path: t.path || t,
-        }));
-        currentIdx = -1;
-        renderAllPlaylists();
-        requestSaveState();
-        if (playlist.length) playTrack(0);
-      }
-    };
-    cont.appendChild(p);
-  });
-}
 
 el('btnChangePath').onclick = async () => {
   const p = await nx.selectDlFolder();
@@ -1407,7 +1210,6 @@ function showToast(msg) {
   }, 3000);
 }
 
-// BUG-008 fix: Removed duplicate drag & drop handlers (block 1 at lines 775-795 handles this with overlay UX)
 
 // --- Audio Visualizer & EQ ---
 let audioCtx;
@@ -1480,7 +1282,6 @@ function initWebAudio() {
         const val = parseFloat(e.target.value);
         filter.gain.value = val;
         sliderVal.innerText = (val > 0 ? '+' : '') + val + 'dB';
-        // BUG-002 fix: Save all EQ gains as single object under 'eqGains' key
         const eqGains = {};
         filters.forEach((f, j) => { eqGains[eqBands[j]] = f.gain.value; });
         nx.setConfig('eqGains', eqGains);
@@ -1530,7 +1331,6 @@ function initWebAudio() {
         const valSpan = s.parentElement.parentElement.querySelector('span.font-mono');
         if (valSpan) valSpan.innerText = '0dB';
       });
-      // BUG-002 fix: Save reset EQ as single object
       const resetGains = {};
       eqBands.forEach(b => { resetGains[b] = 0; });
       nx.setConfig('eqGains', resetGains);

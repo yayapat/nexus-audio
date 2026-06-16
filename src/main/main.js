@@ -30,7 +30,6 @@ app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
 app.commandLine.appendSwitch('disable-features', 'WaylandWpColorManagerV1');
 app.commandLine.appendSwitch('enable-features', 'WaylandWindowDecorations');
 
-// BUG-001 fix: Register custom protocol for safe local file access
 protocol.registerSchemesAsPrivileged([{
   scheme: 'nexus-local',
   privileges: {
@@ -69,7 +68,6 @@ let saveBoundsTimer = null;  // debounce timer สำหรับ save window bo
 let currentDlPath = '';      // download path ปัจจุบัน
 let isDownloading = false;   // guard flag to prevent concurrent download batches (B7)
 
-// B13: Whitelist of allowed config keys for cfg:set
 const ALLOWED_CONFIG_KEYS = ['theme', 'dlPath', 'volume', 'lastFolder', 'windowBounds', 'eqGains', 'eqPresetName', 'userEqPresets', 'autoNext', 'visualizerEnabled', 'discordRPC', 'trayIcon'];
 
 // I10: Maximum number of cached cover images before eviction
@@ -114,17 +112,10 @@ async function saveConfig(data) {
 /** ค้นหาไฟล์เสียงทั้งหมดใน directory แบบ recursive (Asynchronous) */
 async function findAudioFiles(dir) {
   try {
-    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-    const files = await Promise.all(entries.map((entry) => {
-      const res = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        return findAudioFiles(res);
-      } else if (AUDIO_EXTENSIONS.includes(path.extname(entry.name).toLowerCase())) {
-        return res;
-      }
-      return null;
-    }));
-    return files.flat(Infinity).filter(f => f != null);
+    const entries = await fs.promises.readdir(dir, { recursive: true, withFileTypes: true });
+    return entries
+      .filter(e => e.isFile() && AUDIO_EXTENSIONS.includes(path.extname(e.name).toLowerCase()))
+      .map(e => path.join(e.path || dir, e.name));
   } catch (err) {
     console.error('[Scan] Error reading directory:', err.message);
     return [];
@@ -161,35 +152,7 @@ async function extractMetadata(filePath) {
       
       if (!coverExists) {
         await fs.promises.writeFile(coverPath, pic.data);
-
-        // I10: Evict oldest cover images if cache exceeds limit
-        try {
-          if (global.currentCoverCount === undefined) {
-            const allCovers = await fs.promises.readdir(coversDir);
-            global.currentCoverCount = allCovers.length;
-          } else {
-            global.currentCoverCount++;
-          }
-          
-          if (global.currentCoverCount > COVER_CACHE_LIMIT) {
-            const allCovers = await fs.promises.readdir(coversDir);
-            const stats = await Promise.all(
-              allCovers.map(async (f) => {
-                const fp = path.join(coversDir, f);
-                const st = await fs.promises.stat(fp);
-                return { path: fp, mtimeMs: st.mtimeMs };
-              })
-            );
-            stats.sort((a, b) => a.mtimeMs - b.mtimeMs);
-            const toDelete = stats.slice(0, stats.length - COVER_CACHE_LIMIT);
-            await Promise.all(toDelete.map((f) => fs.promises.unlink(f.path).catch(() => {})));
-            global.currentCoverCount = COVER_CACHE_LIMIT;
-          }
-        } catch (evictErr) {
-          console.error('[Covers] Cache eviction error:', evictErr.message);
-        }
       }
-      // B15: Properly encode file path to URL
       coverUrl = url.pathToFileURL(coverPath).href;
     }
 
@@ -347,43 +310,7 @@ function buildTrayMenu(title, isPlaying) {
   tray.setToolTip(title || 'Nexus Audio');
 }
 
-// ============================================================================
-// Media Keys (F22)
-// ============================================================================
 
-function registerMediaKeys() {
-  globalShortcut.unregisterAll();
-
-  const customShortcuts = config.shortcuts || {
-    playPause: 'CommandOrControl+Alt+P',
-    next: 'CommandOrControl+Alt+Right',
-    prev: 'CommandOrControl+Alt+Left'
-  };
-
-  const keys = [
-    { key: 'MediaPlayPause', channel: 'media:play-pause' },
-    { key: 'MediaNextTrack', channel: 'media:next' },
-    { key: 'MediaPreviousTrack', channel: 'media:prev' }
-  ];
-
-  if (customShortcuts.playPause) keys.push({ key: customShortcuts.playPause, channel: 'media:play-pause' });
-  if (customShortcuts.next) keys.push({ key: customShortcuts.next, channel: 'media:next' });
-  if (customShortcuts.prev) keys.push({ key: customShortcuts.prev, channel: 'media:prev' });
-
-  for (const { key, channel } of keys) {
-    try {
-      globalShortcut.register(key, () => {
-        win?.webContents.send(channel);
-      });
-    } catch (err) {
-      console.error(`[MediaKey] Failed to register ${key}:`, err.message);
-    }
-  }
-}
-
-ipcMain.on('reload-shortcuts', () => {
-  registerMediaKeys();
-});
 
 // ============================================================================
 // IPC Handlers — Window
@@ -577,135 +504,7 @@ function setupPlaylistIPC() {
     }
   });
 
-  // Save named playlist
-  ipcMain.handle('pl:save-named', async (_event, name, tracks) => {
-    try {
-      // B6: Sanitize playlist name to prevent path traversal
-      const safeName = path.basename(String(name)).replace(/[\/\\]/g, '').replace(/\.\./g, '');
-      if (!safeName) return false;
-      const dir = playlistsDir();
-      await fs.promises.mkdir(dir, { recursive: true });
-      const filePath = path.join(dir, safeName + '.json');
-      await fs.promises.writeFile(filePath, JSON.stringify(tracks), 'utf-8');
-      return true;
-    } catch (err) {
-      console.error('[Playlist] save-named error:', err.message);
-      return false;
-    }
-  });
 
-  // Get list of named playlists
-  ipcMain.handle('pl:get-names', async () => {
-    try {
-      const dir = playlistsDir();
-      try { await fs.promises.access(dir); } catch { return []; }
-      const files = await fs.promises.readdir(dir);
-      const jsonFiles = files.filter((f) => f.endsWith('.json'));
-      
-      const results = await Promise.all(jsonFiles.map(async (f) => {
-        try {
-          const raw = await fs.promises.readFile(path.join(dir, f), 'utf-8');
-          const tracks = JSON.parse(raw);
-          return {
-            name: path.basename(f, '.json'),
-            count: Array.isArray(tracks) ? tracks.length : 0,
-          };
-        } catch {
-          return { name: path.basename(f, '.json'), count: 0 };
-        }
-      }));
-      return results;
-    } catch (err) {
-      console.error('[Playlist] get-names error:', err.message);
-      return [];
-    }
-  });
-
-  // Load named playlist
-  ipcMain.handle('pl:load-named', async (_event, name) => {
-    try {
-      // B6: Sanitize playlist name to prevent path traversal
-      const safeName = path.basename(String(name)).replace(/[\/\\]/g, '').replace(/\.\./g, '');
-      if (!safeName) return null;
-      const filePath = path.join(playlistsDir(), safeName + '.json');
-      const raw = await fs.promises.readFile(filePath, 'utf-8');
-      return JSON.parse(raw);
-    } catch (err) {
-      console.error('[Playlist] load-named error:', err.message);
-      return null;
-    }
-  });
-
-  // Delete named playlist
-  ipcMain.handle('pl:delete-named', async (_event, name) => {
-    try {
-      // B6: Sanitize playlist name to prevent path traversal
-      const safeName = path.basename(String(name)).replace(/[\/\\]/g, '').replace(/\.\./g, '');
-      if (!safeName) return false;
-      const filePath = path.join(playlistsDir(), safeName + '.json');
-      await fs.promises.unlink(filePath);
-      return true;
-    } catch (err) {
-      console.error('[Playlist] delete-named error:', err.message);
-      return false;
-    }
-  });
-
-  ipcMain.handle('pl:export-m3u', async (_event, tracks) => {
-    try {
-      const result = await dialog.showSaveDialog(win, {
-        title: 'Export Playlist',
-        defaultPath: 'playlist.m3u',
-        filters: [{ name: 'M3U Playlist', extensions: ['m3u'] }],
-      });
-      if (result.canceled) return false;
-
-      let m3u = '#EXTM3U\n';
-      for (const track of tracks) {
-        const duration = track.duration ? Math.round(track.duration) : -1;
-        const title = track.title || path.basename(track.path);
-        const artist = track.artist || '';
-        m3u += `#EXTINF:${duration},${artist} - ${title}\n`;
-        m3u += `${track.path}\n`;
-      }
-      await fs.promises.writeFile(result.filePath, m3u, 'utf-8');
-      return result.filePath;
-    } catch (err) {
-      console.error('[Playlist] export-m3u error:', err.message);
-      return false;
-    }
-  });
-
-  ipcMain.handle('pl:import-m3u', async () => {
-    try {
-      const result = await dialog.showOpenDialog(win, {
-        title: 'Import Playlist',
-        filters: [{ name: 'Playlist Files', extensions: ['m3u', 'm3u8'] }],
-        properties: ['openFile'],
-      });
-      if (result.canceled) return [];
-
-      const content = await fs.promises.readFile(result.filePaths[0], 'utf-8');
-      const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
-      const paths = [];
-      for (const line of lines) {
-        if (line.startsWith('#')) continue;
-        const resolved = path.isAbsolute(line)
-          ? line
-          : path.resolve(path.dirname(result.filePaths[0]), line);
-        try {
-          await fs.promises.access(resolved);
-          if (AUDIO_EXTENSIONS.includes(path.extname(resolved).toLowerCase())) {
-            paths.push(resolved);
-          }
-        } catch {}
-      }
-      return paths;
-    } catch (err) {
-      console.error('[Playlist] import-m3u error:', err.message);
-      return [];
-    }
-  });
 }
 
 // ============================================================================
@@ -715,22 +514,12 @@ function setupPlaylistIPC() {
 const activeDownloads = new Map();
 const cancelledUrls = new Set();
 
-function setupDownloadIPC() {
-  const DL_HISTORY_PATH = () => path.join(app.getPath('userData'), 'download_history.json');
+function getYtdlpPath() {
+  const localBin = path.join(app.getPath('userData'), 'yt-dlp');
+  return fs.existsSync(localBin) ? localBin : 'yt-dlp';
+}
 
-  ipcMain.handle('dl:get-history', async () => {
-    try {
-      const raw = await fs.promises.readFile(DL_HISTORY_PATH(), 'utf-8');
-      return JSON.parse(raw);
-    } catch { return []; }
-  });
-
-  ipcMain.handle('dl:clear-history', async () => {
-    try { await fs.promises.unlink(DL_HISTORY_PATH()); } catch {}
-    return true;
-  });
-
-  ipcMain.handle('dl:open-file', async (_event, filePath) => {
+function setupDownloadIPC() {  ipcMain.handle('dl:open-file', async (_event, filePath) => {
     const { shell } = require('electron');
     await shell.showItemInFolder(filePath);
   });
@@ -817,6 +606,8 @@ function setupFilesystemIPC() {
     }
   });
 
+
+
   // Check if yt-dlp and ffmpeg are available in PATH
   ipcMain.handle('dl:check-deps', async () => {
     const check = (cmd) =>
@@ -826,14 +617,14 @@ function setupFilesystemIPC() {
         proc.on('close', (code) => resolve(code === 0));
         proc.on('error', () => resolve(false));
       });
-    const ytdlp = await check('yt-dlp');
+    const ytdlp = await check(getYtdlpPath());
     const ffmpeg = await check('ffmpeg');
     return { ytdlp, ffmpeg };
   });
 
   ipcMain.handle('dl:check-ytdlp', async () => {
     return new Promise((resolve) => {
-      const proc = spawn('yt-dlp', ['--version']);
+      const proc = spawn(getYtdlpPath(), ['--version']);
       let stdout = '';
       
       const timeout = setTimeout(() => {
@@ -867,37 +658,19 @@ function setupFilesystemIPC() {
 
   ipcMain.handle('dl:update-ytdlp', async () => {
     return new Promise((resolve) => {
-      const proc = spawn('yt-dlp', ['-U']);
-      let out = '';
-      let errStr = '';
+      const binPath = path.join(app.getPath('userData'), 'yt-dlp');
+      const proc = spawn('curl', ['-L', 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux', '-o', binPath]);
       
-      const timeout = setTimeout(() => {
-        proc.kill();
-        resolve({ success: false, message: 'Update timed out after 30 seconds.' });
-      }, 30000);
-
-      proc.stdout.on('data', (data) => { out += data.toString(); });
-      proc.stderr.on('data', (data) => { errStr += data.toString(); });
-
       proc.on('close', (code) => {
-        clearTimeout(timeout);
-        const combinedOut = (errStr + out).toLowerCase();
-        
-        if (code !== 0 || combinedOut.includes('error')) {
-          if (combinedOut.includes('package manager')) {
-            resolve({ success: false, message: 'Please update yt-dlp using your system package manager (e.g. pacman -S yt-dlp).' });
-          } else {
-            resolve({ success: false, message: errStr || out || 'Unknown update error.' });
-          }
+        if (code === 0) {
+          spawn('chmod', ['+x', binPath]).on('close', () => {
+            resolve({ success: true, message: 'Updated local yt-dlp successfully!' });
+          });
         } else {
-          resolve({ success: true, message: 'Updated successfully! ' + out });
+          resolve({ success: false, message: 'Failed to download yt-dlp binary.' });
         }
       });
-      
-      proc.on('error', (err) => {
-        clearTimeout(timeout);
-        resolve({ success: false, message: err.message });
-      });
+      proc.on('error', (err) => resolve({ success: false, message: err.message }));
     });
   });
 
@@ -923,14 +696,12 @@ function setupFilesystemIPC() {
     const safeFormat = allowedFormats.includes(format) ? format : 'mp3';
     const safeQuality = (quality && typeof quality === 'string' && /^\d+$/.test(quality)) ? quality : '192';
 
-    // B7: Prevent concurrent download batches
     if (isDownloading) {
       win?.webContents.send('dl:error', { url: urls[0], message: 'A download batch is already in progress. Please wait.' });
       return;
     }
     isDownloading = true;
 
-    // B12: Validate all URLs before starting
     const validUrls = [];
     for (const u of urls) {
       const trimmed = String(u).trim();
@@ -956,7 +727,6 @@ function setupFilesystemIPC() {
       return;
     }
 
-    // B14: If mkdir fails, report error for all URLs and return early
     try {
       if (!fs.existsSync(currentDlPath)) {
         await fs.promises.mkdir(currentDlPath, { recursive: true });
@@ -1031,7 +801,7 @@ function downloadSingleURL(url, format, quality) {
     }
 
     let outputFilePath = null;
-    const proc = spawn('yt-dlp', args);
+    const proc = spawn(getYtdlpPath(), args);
     activeDownloads.set(url, proc);
 
     proc.stdout.on('data', (data) => {
@@ -1099,26 +869,6 @@ function downloadSingleURL(url, format, quality) {
               cover: metadata.cover,
             },
           });
-
-          const DL_HISTORY_PATH = () => path.join(app.getPath('userData'), 'download_history.json');
-          const DL_HISTORY_LIMIT = 200;
-          let history = [];
-          try {
-            const raw = await fs.promises.readFile(DL_HISTORY_PATH(), 'utf-8');
-            history = JSON.parse(raw);
-          } catch {}
-          
-          history.unshift({
-            url,
-            filePath: outputFilePath,
-            title: metadata?.title || url,
-            artist: metadata?.artist || '',
-            cover: metadata?.cover || null,
-            downloadedAt: new Date().toISOString(),
-          });
-          
-          if (history.length > DL_HISTORY_LIMIT) history = history.slice(0, DL_HISTORY_LIMIT);
-          await fs.promises.writeFile(DL_HISTORY_PATH(), JSON.stringify(history, null, 2), 'utf-8');
         } catch (err) {
           console.error('[Download] metadata extraction error:', err.message);
           win?.webContents.send('dl:success', { url, filePath: outputFilePath, metadata: null });
@@ -1135,7 +885,6 @@ function downloadSingleURL(url, format, quality) {
 
     proc.on('error', (err) => {
       console.error('[Download] spawn error:', err.message);
-      // B8: Send dl:error event and clean up activeDownloads on spawn error
       win?.webContents.send('dl:log', `[Error] ${sanitize(err.message)}`);
       win?.webContents.send('dl:error', { url, message: `Spawn error: ${err.message}` });
       activeDownloads.delete(url);
@@ -1159,7 +908,6 @@ function setupConfigIPC() {
 
   ipcMain.on('cfg:set', async (_event, key, value) => {
     try {
-      // B13: Only allow whitelisted config keys
       if (!ALLOWED_CONFIG_KEYS.includes(key)) {
         console.warn(`[Config] Blocked setting non-whitelisted key: ${key}`);
         return;
@@ -1292,8 +1040,7 @@ app.whenReady().then(() => {
   // สร้าง system tray
   createTray();
 
-  // ลงทะเบียน media keys
-  registerMediaKeys();
+
 
   // ตั้ง IPC handlers ทั้งหมด
   setupWindowIPC();
@@ -1314,9 +1061,8 @@ app.on('window-all-closed', () => {
 
 // Cleanup เมื่อ quit
 app.on('will-quit', () => {
-  globalShortcut.unregisterAll();
 
-  // B17: Kill all active download processes on quit
+
   for (const [dlUrl, proc] of activeDownloads) {
     try {
       proc.kill('SIGKILL');

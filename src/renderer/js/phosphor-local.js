@@ -1,4 +1,3 @@
-// BUG-018 fix: Load Phosphor Icons from local node_modules (offline support)
 var head = document.getElementsByTagName("head")[0];
 
 const root = window._appRoot || '';

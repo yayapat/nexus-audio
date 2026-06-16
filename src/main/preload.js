@@ -45,12 +45,6 @@ contextBridge.exposeInMainWorld('nexus', {
   // Playlist persistence
   saveState: (d) => ipcRenderer.invoke('pl:save-state', d),
   loadState: () => ipcRenderer.invoke('pl:load-state'),
-  saveNamedPlaylist: (n, t) => ipcRenderer.invoke('pl:save-named', n, t),
-  getNamedPlaylists: () => ipcRenderer.invoke('pl:get-names'),
-  loadNamedPlaylist: (n) => ipcRenderer.invoke('pl:load-named', n),
-  deleteNamedPlaylist: (n) => ipcRenderer.invoke('pl:delete-named', n),
-  exportPlaylist: (tracks) => ipcRenderer.invoke('pl:export-m3u', tracks),
-  importPlaylist: () => ipcRenderer.invoke('pl:import-m3u'),
 
   // Download
   dlStart: (o) => {
@@ -68,8 +62,6 @@ contextBridge.exposeInMainWorld('nexus', {
   checkYtdlp: () => ipcRenderer.invoke('dl:check-ytdlp'),
   updateYtdlp: () => ipcRenderer.invoke('dl:update-ytdlp'),
   cancelDownload: (url) => ipcRenderer.send('dl:cancel', url),
-  dlGetHistory: () => ipcRenderer.invoke('dl:get-history'),
-  dlClearHistory: () => ipcRenderer.invoke('dl:clear-history'),
   dlOpenFile: (fp) => ipcRenderer.invoke('dl:open-file', fp),
   onDlLog: (fn) => on('dl:log', fn),
   onDlProgress: (fn) => on('dl:progress', fn),
