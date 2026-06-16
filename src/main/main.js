@@ -30,7 +30,12 @@ app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
 app.commandLine.appendSwitch('disable-features', 'WaylandWpColorManagerV1');
 app.commandLine.appendSwitch('enable-features', 'WaylandWindowDecorations');
 
-app.setAppUserModelId('nexus-audio');
+// Only set AppUserModelId when packaged (e.g. installed via pacman)
+// Setting this in dev mode/unpacked raw binary on Wayland causes KDE to look for a non-existent .desktop file and show a blank 'W' icon
+if (app.isPackaged) {
+  app.setAppUserModelId('nexus-audio');
+  app.setDesktopName('nexus-audio.desktop');
+}
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'nexus-local',
