@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="build/icon.png" width="128" alt="Nexus Audio Logo">
   
 # 🎵 Nexus Audio
 
