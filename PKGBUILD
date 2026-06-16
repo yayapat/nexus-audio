@@ -1,6 +1,6 @@
 _pkgname=nexus-audio
 pkgname=nexus-audio-git
-pkgver=r46.ef25889
+pkgver=r4.6e9388c
 pkgrel=1
 pkgdesc="Modern, fast, and feature-rich offline music player & downloader (Git version)"
 arch=('x86_64')
@@ -36,4 +36,21 @@ package() {
   # Symlink the binary directly to /usr/bin/nexus-audio
   install -dm755 "$pkgdir/usr/bin"
   ln -sf "/opt/$_pkgname/nexus-audio" "$pkgdir/usr/bin/$_pkgname"
+
+  # Install icon
+  install -Dm644 build/icon.png "$pkgdir/usr/share/pixmaps/$_pkgname.png"
+
+  # Create and install .desktop file
+  install -dm755 "$pkgdir/usr/share/applications"
+  cat <<EOF > "$pkgdir/usr/share/applications/$_pkgname.desktop"
+[Desktop Entry]
+Name=Nexus Audio
+Exec=/usr/bin/nexus-audio %U
+Terminal=false
+Type=Application
+Icon=nexus-audio
+StartupWMClass=nexus-audio
+Comment=Modern music player & downloader
+Categories=AudioVideo;Audio;Player;
+EOF
 }
