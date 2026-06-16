@@ -1,29 +1,39 @@
-pkgname=nexus-audio
-pkgver=2.0.3
+_pkgname=nexus-audio
+pkgname=nexus-audio-git
+pkgver=r46.ef25889
 pkgrel=1
-pkgdesc="Nexus Audio - Modern music player & downloader"
+pkgdesc="Modern, fast, and feature-rich offline music player & downloader (Git version)"
 arch=('x86_64')
-url="https://github.com/punyapat/nexus-audio"
+url="https://github.com/yayapat/nexus-audio"
 license=('MIT')
-depends=('nss' 'alsa-lib' 'gtk3' 'nss')
-makedepends=('npm')
-source=()
+depends=('nss' 'alsa-lib' 'gtk3')
+makedepends=('git' 'npm')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+source=("git+https://github.com/yayapat/nexus-audio.git#branch=main")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/$_pkgname"
+  # Generate version based on total commit count and short hash (e.g. r46.ef25889)
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
 
 build() {
-  cd "$startdir"
+  cd "$srcdir/$_pkgname"
   npm install
   npm run build:css
   npx electron-builder --linux dir
 }
 
 package() {
-  cd "$startdir"
+  cd "$srcdir/$_pkgname"
   
-  # ติดตั้งไฟล์แอปทั้งหมดลงใน /opt/nexus-audio
-  install -dm755 "$pkgdir/opt/nexus-audio"
-  cp -r dist/linux-unpacked/* "$pkgdir/opt/nexus-audio/"
+  # Install full application files to /opt/nexus-audio
+  install -dm755 "$pkgdir/opt/$_pkgname"
+  cp -r dist/linux-unpacked/* "$pkgdir/opt/$_pkgname/"
   
-  # สร้าง Symlink ไปที่ /usr/bin/nexus-audio ตรงๆ ตามที่ขอ
+  # Symlink the binary directly to /usr/bin/nexus-audio
   install -dm755 "$pkgdir/usr/bin"
-  ln -sf "/opt/nexus-audio/nexus-audio" "$pkgdir/usr/bin/nexus-audio"
+  ln -sf "/opt/$_pkgname/nexus-audio" "$pkgdir/usr/bin/$_pkgname"
 }
