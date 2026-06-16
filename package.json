@@ -25,6 +25,10 @@
         "pacman"
       ],
       "icon": "build/icon.png",
+      "executableName": "nexus-audio",
+      "desktop": {
+        "StartupWMClass": "nexus-audio"
+      },
       "category": "AudioVideo;Audio;Player;",
       "maintainer": "Punyapat",
       "synopsis": "Modern music player & downloader"

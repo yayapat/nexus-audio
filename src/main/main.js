@@ -30,6 +30,8 @@ app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
 app.commandLine.appendSwitch('disable-features', 'WaylandWpColorManagerV1');
 app.commandLine.appendSwitch('enable-features', 'WaylandWindowDecorations');
 
+app.setAppUserModelId('nexus-audio');
+
 protocol.registerSchemesAsPrivileged([{
   scheme: 'nexus-local',
   privileges: {
