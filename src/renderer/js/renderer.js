@@ -9,26 +9,9 @@ let isLoop = false;
 let isAutoNext = true;
 let isDraggingSlider = false;
 
-class LRUMap {
-  constructor(maxSize = 2000) {
-    this.maxSize = maxSize;
-    this.map = new Map();
-  }
-  has(k) { return this.map.has(k); }
-  get(k) {
-    if (!this.map.has(k)) return undefined;
-    const v = this.map.get(k);
-    this.map.delete(k);
-    this.map.set(k, v);
-    return v;
-  }
-  set(k, v) {
-    if (this.map.has(k)) this.map.delete(k);
-    this.map.set(k, v);
-    if (this.map.size > this.maxSize) {
-      this.map.delete(this.map.keys().next().value);
-    }
-  }
+class LRUMap extends Map {
+  constructor(maxSize = 2000) { super(); this.maxSize = maxSize; }
+  set(k, v) { super.set(k, v); if (this.size > this.maxSize) this.delete(this.keys().next().value); return this; }
 }
 let metadataCache = new LRUMap(2000);
 let theme = 'light';
@@ -101,13 +84,12 @@ async function init() {
     
       // Background metadata fetch for all loaded tracks
       if (playlist.length > 0) {
-        let initRenderTimeout;
         for (const t of playlist) {
           if (!metadataCache.has(t.path)) {
             nx.extractMetadata(t.path).then(meta => {
               metadataCache.set(t.path, meta);
-              clearTimeout(initRenderTimeout);
-              initRenderTimeout = setTimeout(() => renderAllPlaylists(), 300);
+              clearTimeout(window.initRenderTimeout);
+              window.initRenderTimeout = setTimeout(() => renderAllPlaylists(), 300);
             }).catch(err => {
               console.error('Failed to extract metadata for', t.path, err);
             });
@@ -134,36 +116,7 @@ async function init() {
       navigator.mediaSession.setActionHandler('nexttrack', () => playNext());
     }
 
-    // Initialize UI Plugins
-    window.NexusAPI = {
-      playlist,
-      audioPlayer,
-      playTrack,
-      playNext,
-      playPrev,
-      showToast,
-      escapeHtml,
-      el: (id) => document.getElementById(id),
-      nx: window.nx
-    };
-
-    const uiPlugins = await nx.getUIPlugins();
-    uiPlugins.forEach(p => {
-      try {
-        const script = document.createElement('script');
-        script.textContent = `
-          (function() {
-            try {
-              ${p.code}
-            } catch(e) { console.error('[Plugin: ${p.name}] Runtime Error:', e); }
-          })();
-        `;
-        document.body.appendChild(script);
-        console.log('[Plugins] Loaded:', p.name);
-      } catch (err) {
-        console.error('[Plugins] Init Error:', p.name, err);
-      }
-    });
+    // Plugins removed for lean codebase
 
   } catch (err) {
     console.error("Init Error:", err);
@@ -334,6 +287,11 @@ function formatTime(seconds) {
 }
 
 const getFilename = (path) => path.split(/[/\\]/).pop().replace(/\.(mp3|wav|flac|m4a|ogg|wma|aac|opus|webm)$/i, '');
+const getFolderName = (path) => {
+  const parts = path.split(/[/\\]/);
+  if (parts.length > 1) return parts[parts.length - 2];
+  return 'Unknown';
+};
 const escapeHtml = (str) => {
   if (!str) return '';
   return str.toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
@@ -341,17 +299,6 @@ const escapeHtml = (str) => {
 
 audioPlayer.addEventListener('timeupdate', () => {
   if(isDraggingSlider || !audioPlayer.duration) return;
-
-  if (
-    typeof crossfadeDuration !== 'undefined' && crossfadeDuration > 0 &&
-    !isLoop &&
-    isAutoNext &&
-    !crossfadeTimer &&
-    audioPlayer.duration - audioPlayer.currentTime <= crossfadeDuration
-  ) {
-    crossfadeTimer = true;
-    if (typeof startCrossfade === 'function') startCrossfade();
-  }
 
   const cur = audioPlayer.currentTime;
   const tot = audioPlayer.duration;
@@ -382,7 +329,9 @@ audioPlayer.addEventListener('play', () => {
 });
 audioPlayer.addEventListener('pause', () => { isPlaying = false; updatePlayPauseUI(); });
 audioPlayer.addEventListener('error', (e) => {
-  console.error("Audio playback error", e);
+  const err = e.target.error;
+  const fileName = playlist[currentIdx] ? getFilename(playlist[currentIdx].path) : 'Unknown file';
+  console.error(`Audio playback error [object MediaError]: ${fileName}`, err ? `Code: ${err.code}, Msg: ${err.message}` : e);
   errorCount++;
   showToast("Error: Cannot play track");
   if (errorCount > 5) {
@@ -560,7 +509,6 @@ el('volSlider').addEventListener('input', (e) => {
     updateVolIcon(vol);
   }
   
-  requestSaveState();
   nx.setConfig('volume', vol);
 });
 
@@ -658,32 +606,27 @@ async function loadTrackUI(idx, autoPlay = true) {
     el('miniCover').classList.add('hidden');
     el('miniDefaultCover').classList.remove('hidden');
   }
+
+  // Apply ReplayGain
+  if (window.replayGainNode) {
+    if (meta.replayGain) {
+      // Parse "x.xx dB" or just the number
+      const gainDb = parseFloat(meta.replayGain.replace(/[^\d.-]/g, ''));
+      if (!isNaN(gainDb)) {
+        // Convert dB to linear gain
+        const linearGain = Math.pow(10, gainDb / 20);
+        window.replayGainNode.gain.setTargetAtTime(linearGain, audioCtx.currentTime, 0.1);
+      } else {
+        window.replayGainNode.gain.setTargetAtTime(1, audioCtx.currentTime, 0.1);
+      }
+    } else {
+      window.replayGainNode.gain.setTargetAtTime(1, audioCtx.currentTime, 0.1);
+    }
+  }
   
   nx.notifySongChange({ title, artist, cover: meta.cover });
   nx.updateTray({ title, isPlaying: autoPlay });
-  
-  if (typeof resetMarqueeCache === 'function') resetMarqueeCache();
-  setTimeout(updateAutoMarquee, 50); // wait for DOM to update text
 }
-
-function updateAutoMarquee() {
-  ['fsTitle', 'miniTitle'].forEach(id => {
-    const textEl = el(id);
-    if (!textEl) return;
-    const container = textEl.closest('.marquee-container');
-    if (!container) return;
-    
-    if (setupMarquee(container)) {
-      container.classList.add('marquee-auto');
-    } else {
-      container.classList.remove('marquee-auto');
-    }
-  });
-}
-window.addEventListener('resize', () => {
-  clearTimeout(window.resizeTimer);
-  window.resizeTimer = setTimeout(updateAutoMarquee, 200);
-});
 
 function playTrack(idx) {
   if (!playlist.length || idx < 0 || idx >= playlist.length) return;
@@ -751,12 +694,19 @@ async function updateMediaSession(track, meta) {
 // --- Playlist Operations ---
 function generateId() { return crypto.randomUUID(); }
 
+let loadSessionId = 0; // Tracks the current loading session
+
 async function addFiles(paths, autoplay = false) {
   if (!paths || !paths.length) return;
   
-  // Deduplicate files
+  const currentSession = loadSessionId;
+  
+  // Deduplicate files internally from the dropped array
+  const uniquePaths = [...new Set(paths)];
+  
+  // Deduplicate against existing playlist
   const existingPaths = new Set(playlist.map(t => t.path));
-  const newPaths = paths.filter(p => !existingPaths.has(p));
+  const newPaths = uniquePaths.filter(p => !existingPaths.has(p));
   
   if (newPaths.length === 0) return; // All files already exist
   
@@ -774,6 +724,8 @@ async function addFiles(paths, autoplay = false) {
   // Parallel metadata fetch with concurrency limit
   const BATCH = 5;
   for (let i = 0; i < newPaths.length; i += BATCH) {
+    if (loadSessionId !== currentSession) break; // Abort if cleared during load
+    
     const batch = newPaths.slice(i, i + BATCH).filter(p => !metadataCache.has(p));
     await Promise.allSettled(batch.map(async (p) => {
       try {
@@ -783,14 +735,27 @@ async function addFiles(paths, autoplay = false) {
         console.error('Metadata fetch failed:', p, err);
       }
     }));
-    renderAllPlaylists();
+    
+    if (loadSessionId === currentSession) {
+      renderAllPlaylists();
+    }
   }
 }
 
-el('btnAddFiles').onclick = async () => addFiles(await nx.openFiles(), true);
-el('btnAddFolder').onclick = async () => addFiles(await nx.openFolder(), false);
+el('btnAddFiles').onclick = async () => {
+  const session = loadSessionId;
+  const paths = await nx.openFiles();
+  if (session === loadSessionId) addFiles(paths, true);
+};
+
+el('btnAddFolder').onclick = async () => {
+  const session = loadSessionId;
+  const paths = await nx.openFolder();
+  if (session === loadSessionId) addFiles(paths, false);
+};
 
 el('btnClearPl').onclick = () => {
+  loadSessionId++; // Abort any pending metadata loads
   playlist = [];
   currentIdx = -1;
   audioPlayer.pause();
@@ -880,6 +845,40 @@ el('plSearch').addEventListener('input', () => {
   clearTimeout(searchDebounceTimeout);
   searchDebounceTimeout = setTimeout(renderAllPlaylists, 300);
 });
+let sortState = 'default';
+el('btnSort')?.addEventListener('click', () => {
+  if (!playlist.length) return;
+  const currentTrack = playlist[currentIdx];
+  if (sortState === 'default') {
+    sortState = 'folder';
+    playlist.sort((a, b) => {
+      const dirA = getFolderName(a.path).toLowerCase();
+      const dirB = getFolderName(b.path).toLowerCase();
+      if (dirA === dirB) {
+        const fileA = getFilename(a.path).toLowerCase();
+        const fileB = getFilename(b.path).toLowerCase();
+        return fileA.localeCompare(fileB);
+      }
+      return dirA.localeCompare(dirB);
+    });
+    showToast('จัดเรียงตามโฟลเดอร์');
+  } else {
+    sortState = 'default';
+    playlist.sort((a, b) => {
+      const fileA = getFilename(a.path).toLowerCase();
+      const fileB = getFilename(b.path).toLowerCase();
+      return fileA.localeCompare(fileB);
+    });
+    showToast('จัดเรียงตามชื่อไฟล์');
+  }
+  
+  if (currentTrack) {
+    const newIdx = playlist.findIndex(t => t.path === currentTrack.path);
+    if (newIdx !== -1) currentIdx = newIdx;
+  }
+  renderAllPlaylists();
+  requestSaveState();
+});
 
 function updatePlaylistHighlight() {
   const allMainItems = el('trackList').querySelectorAll('.track-item');
@@ -935,27 +934,60 @@ function updatePlaylistHighlight() {
   }
 }
 
-function renderAllPlaylists() {
-  const mainContainer = el('trackList');
+function buildTrackElement(item, idx, meta, isActive) {
+  const name = meta.title || getFilename(item.path);
+  const artist = meta.artist || 'Unknown Artist';
+  
+  const pItem = document.createElement('div');
+  pItem.className = `track-item flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all duration-300 border hover:-translate-y-0.5 hover:shadow-md ${isActive ? 'bg-sky-50/50 dark:bg-sky-900/30 border-sky-200 dark:border-sky-800 shadow-sm' : 'bg-white dark:bg-slate-800 border-transparent hover:border-slate-200 dark:hover:border-slate-600'}`;
+  pItem.draggable = true;
+  
+  const coverHtml = meta.cover ? `<img src="${meta.cover}" class="w-full h-full object-cover">` : `<i class="ph-fill ${isActive ? 'ph-waveform animate-pulse' : 'ph-music-note'} text-lg"></i>`;
+
+  pItem.innerHTML = `
+    <div class="flex items-center gap-4 overflow-hidden w-full">
+      <i class="ph-bold ph-dots-six-vertical text-slate-300 hover:text-slate-500 cursor-grab text-xl"></i>
+      <input type="checkbox" class="pl-check" data-idx="${idx}" onclick="event.stopPropagation()">
+      <div class="w-10 h-10 rounded-lg overflow-hidden flex items-center justify-center shrink-0 ${isActive && !meta.cover ? 'bg-sky-500 text-white shadow-md shadow-sky-200' : 'bg-slate-100 dark:bg-slate-700 text-slate-400'}">
+        ${coverHtml}
+      </div>
+      <div class="truncate flex-1 pointer-events-none">
+        <h4 class="font-semibold text-sm truncate ${isActive ? 'text-sky-700 dark:text-sky-400' : 'text-slate-700 dark:text-slate-200'}">${escapeHtml(name)}</h4>
+        <div class="flex items-center gap-1 text-xs text-slate-400 truncate">
+          <span class="truncate max-w-[50%]">${escapeHtml(artist)}</span>
+          <span class="text-[10px] opacity-50">•</span>
+          <i class="ph-fill ph-folder text-[10px] opacity-70"></i>
+          <span class="truncate text-[10px] opacity-80">${escapeHtml(getFolderName(item.path))}</span>
+        </div>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 shrink-0">
+      <span class="text-xs text-slate-400 font-mono">${formatTime(meta.duration)}</span>
+      <button class="text-slate-300 hover:text-red-500 p-2 opacity-0 hover:opacity-100 transition"><i class="ph-bold ph-trash text-lg pointer-events-none"></i></button>
+    </div>
+  `;
+  pItem.ondblclick = () => playTrack(idx);
+  pItem.oncontextmenu = (e) => showTrackContextMenu(e, idx);
+  pItem.querySelector('button').onclick = (e) => removeTrack(idx, e);
+  pItem.querySelector('.pl-check').onchange = updateDeleteBtn;
+  attachDragHandlers(pItem, idx);
+  
+  return pItem;
+}
+
+function renderMiniQueue() {
   const miniContainer = el('miniQueueList');
-  const query = el('plSearch').value.toLowerCase();
-
   miniContainer.innerHTML = '';
-  mainContainer.innerHTML = '';
-
   if (!playlist.length) {
-    mainContainer.innerHTML = '<div class="text-center text-slate-400 mt-20 text-sm flex flex-col items-center"><i class="ph-duotone ph-list-plus text-4xl mb-2 text-slate-300"></i>Queue is empty.</div>';
     miniContainer.innerHTML = '<div class="text-center text-slate-400 mt-10 text-xs italic">Queue is empty</div>';
     return;
   }
-
   playlist.forEach((item, idx) => {
     const meta = metadataCache.get(item.path) || {};
     const name = meta.title || getFilename(item.path);
     const artist = meta.artist || 'Unknown Artist';
     const isActive = (idx === currentIdx);
 
-    // Mini Queue
     const mItem = document.createElement('div');
     mItem.className = `track-item flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${isActive ? 'bg-sky-100/60 dark:bg-sky-900/50 border border-sky-200 dark:border-sky-700' : 'hover:bg-slate-100 dark:hover:bg-slate-700 border border-transparent'}`;
     mItem.draggable = true;
@@ -965,47 +997,112 @@ function renderAllPlaylists() {
         <div class="marquee-container">
           <h4 class="marquee-text font-semibold text-xs ${isActive ? 'text-sky-700 dark:text-sky-300' : 'text-slate-600 dark:text-slate-300'}">${escapeHtml(name)}</h4>
         </div>
-        <span class="text-[10px] text-slate-400 truncate">${escapeHtml(artist)}</span>
+        <div class="flex items-center gap-1 text-[10px] text-slate-400 truncate">
+          <span class="truncate max-w-[60%]">${escapeHtml(artist)}</span>
+          <span class="opacity-50">•</span>
+          <span class="truncate opacity-80">${escapeHtml(getFolderName(item.path))}</span>
+        </div>
       </div>
     `;
     mItem.onclick = () => playTrack(idx);
+    mItem.oncontextmenu = (e) => showTrackContextMenu(e, idx);
     attachDragHandlers(mItem, idx);
     miniContainer.appendChild(mItem);
-
-    // Main Playlist (filtered)
-    if (query && !name.toLowerCase().includes(query) && !artist.toLowerCase().includes(query)) return;
-
-    const pItem = document.createElement('div');
-    pItem.className = `track-item flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all duration-300 border hover:-translate-y-0.5 hover:shadow-md ${isActive ? 'bg-sky-50/50 dark:bg-sky-900/30 border-sky-200 dark:border-sky-800 shadow-sm' : 'bg-white dark:bg-slate-800 border-transparent hover:border-slate-200 dark:hover:border-slate-600'}`;
-    pItem.draggable = true;
-    
-    const coverHtml = meta.cover ? `<img src="${meta.cover}" class="w-full h-full object-cover">` : `<i class="ph-fill ${isActive ? 'ph-waveform animate-pulse' : 'ph-music-note'} text-lg"></i>`;
-
-    pItem.innerHTML = `
-      <div class="flex items-center gap-4 overflow-hidden w-full">
-        <i class="ph-bold ph-dots-six-vertical text-slate-300 hover:text-slate-500 cursor-grab text-xl"></i>
-        <input type="checkbox" class="pl-check" data-idx="${idx}" onclick="event.stopPropagation()">
-        <div class="w-10 h-10 rounded-lg overflow-hidden flex items-center justify-center shrink-0 ${isActive && !meta.cover ? 'bg-sky-500 text-white shadow-md shadow-sky-200' : 'bg-slate-100 dark:bg-slate-700 text-slate-400'}">
-          ${coverHtml}
-        </div>
-        <div class="truncate flex-1 pointer-events-none">
-          <h4 class="font-semibold text-sm truncate ${isActive ? 'text-sky-700 dark:text-sky-400' : 'text-slate-700 dark:text-slate-200'}">${escapeHtml(name)}</h4>
-          <span class="text-xs text-slate-400 truncate">${escapeHtml(artist)}</span>
-        </div>
-      </div>
-      <div class="flex items-center gap-3 shrink-0">
-        <span class="text-xs text-slate-400 font-mono">${formatTime(meta.duration)}</span>
-        <button class="text-slate-300 hover:text-red-500 p-2 opacity-0 hover:opacity-100 transition"><i class="ph-bold ph-trash text-lg pointer-events-none"></i></button>
-      </div>
-    `;
-    
-    pItem.ondblclick = () => playTrack(idx);
-    pItem.querySelector('button').onclick = (e) => removeTrack(idx, e);
-    pItem.querySelector('.pl-check').onchange = updateDeleteBtn;
-    
-    attachDragHandlers(pItem, idx);
-    mainContainer.appendChild(pItem);
   });
+}
+
+let contextMenuTargetIdx = -1;
+const ctxMenu = el('trackContextMenu');
+
+function showTrackContextMenu(e, idx) {
+  e.preventDefault();
+  contextMenuTargetIdx = idx;
+  if (!ctxMenu) return;
+  
+  ctxMenu.classList.remove('hidden');
+  
+  // Constrain position to window
+  let x = e.clientX;
+  let y = e.clientY;
+  const w = ctxMenu.offsetWidth;
+  const h = ctxMenu.offsetHeight;
+  
+  if (x + w > window.innerWidth) x -= w;
+  if (y + h > window.innerHeight) y -= h;
+  
+  ctxMenu.style.left = `${x}px`;
+  ctxMenu.style.top = `${y}px`;
+}
+
+document.addEventListener('click', (e) => {
+  if (ctxMenu && !ctxMenu.contains(e.target)) {
+    ctxMenu.classList.add('hidden');
+  }
+});
+
+el('ctxPlayNext')?.addEventListener('click', () => {
+  if (contextMenuTargetIdx === -1) return;
+  if (ctxMenu) ctxMenu.classList.add('hidden');
+  
+  // Move track to currentIdx + 1
+  if (contextMenuTargetIdx === currentIdx) return;
+  
+  const targetTrack = playlist[contextMenuTargetIdx];
+  const insertPos = contextMenuTargetIdx > currentIdx ? currentIdx + 1 : currentIdx;
+  
+  playlist.splice(contextMenuTargetIdx, 1);
+  playlist.splice(insertPos, 0, targetTrack);
+  
+  if (contextMenuTargetIdx < currentIdx && insertPos >= currentIdx) currentIdx--;
+  else if (contextMenuTargetIdx > currentIdx && insertPos <= currentIdx) currentIdx++;
+  
+  renderAllPlaylists();
+  requestSaveState();
+});
+
+el('ctxRemove')?.addEventListener('click', () => {
+  if (contextMenuTargetIdx === -1) return;
+  if (ctxMenu) ctxMenu.classList.add('hidden');
+  removeTrack(contextMenuTargetIdx);
+});
+
+function renderAllPlaylists() {
+  const container = el('trackList');
+  const query = el('plSearch').value.toLowerCase();
+  container.innerHTML = '';
+  
+  if (!playlist.length) {
+    container.innerHTML = '<div class="text-center text-slate-400 mt-20 text-sm flex flex-col items-center"><i class="ph-duotone ph-list-plus text-4xl mb-2 text-slate-300"></i>Queue is empty.</div>';
+  } else {
+    const list = document.createElement('div');
+    list.className = 'flex flex-col gap-2 relative w-full';
+    playlist.forEach((item, idx) => {
+      const m = metadataCache.get(item.path) || {};
+      const n = (m.title || getFilename(item.path)).toLowerCase();
+      const a = (m.artist || 'Unknown Artist').toLowerCase();
+      const f = getFolderName(item.path).toLowerCase();
+      if (!query || n.includes(query) || a.includes(query) || f.includes(query)) {
+        list.appendChild(buildTrackElement(item, idx, m, idx === currentIdx));
+      }
+    });
+    container.appendChild(list);
+  }
+
+  renderMiniQueue();
+
+  const totalTracks = playlist.length;
+  const uniqueFolders = new Set(playlist.map(t => {
+    const parts = t.path.split(/[/\\]/);
+    parts.pop();
+    return parts.join('/');
+  })).size;
+  const tracksText = `${totalTracks} เพลง`;
+  const foldersText = totalTracks > 0 ? ` • ${uniqueFolders} โฟลเดอร์` : '';
+  const mainStatsEl = el('playlistStatsMain');
+  if (mainStatsEl) mainStatsEl.innerText = `${tracksText}${foldersText}`;
+  const miniStatsEl = el('playlistStatsMini');
+  if (miniStatsEl) miniStatsEl.innerText = tracksText;
+
   updateDeleteBtn();
 }
 
@@ -1141,16 +1238,14 @@ async function loadNamedPlaylists() {
   });
 }
 
-// --- Downloader ---
 el('btnChangePath').onclick = async () => {
-  const p = await nx.dlChangePath();
-  if (p) el('dlPathText').innerText = p;
+  const p = await nx.selectDlFolder();
+  if (p) {
+    const savedPath = await nx.fsSetDlPath(p);
+    if (savedPath) el('dlPathText').innerText = savedPath;
+  }
 };
 
-el('dlFormat').onchange = () => {
-  const f = el('dlFormat').value;
-  el('dlQuality').style.display = (f === 'mp3' || f === 'm4a') ? 'block' : 'none';
-};
 
 el('btnDownload').onclick = () => {
   const input = el('dlInput').value.trim();
@@ -1277,11 +1372,18 @@ nx.onDlSuccess(({ url, filePath, metadata }) => {
   showToast(`Download complete: ${item ? item.title : getFilename(filePath)}`);
 });
 
+const DL_RESULT_TIMEOUT = 10_000;
+
 nx.onDlComplete(() => {
-  downloadQueue = downloadQueue.filter(i => 
-    i.status === 'waiting' || i.status === 'downloading'
-  );
   renderDlQueue();
+  downloadQueue
+    .filter(i => i.status === 'complete' || i.status === 'error' || i.status === 'cancel')
+    .forEach(item => {
+      setTimeout(() => {
+        downloadQueue = downloadQueue.filter(i => i !== item);
+        renderDlQueue();
+      }, DL_RESULT_TIMEOUT);
+    });
 });
 
 // --- Toast Notifications ---
@@ -1324,7 +1426,9 @@ function initWebAudio() {
   analyser = audioCtx.createAnalyser();
   analyser.fftSize = 256;
   
-  let prevNode = source;
+  window.replayGainNode = audioCtx.createGain();
+  source.connect(window.replayGainNode);
+  let prevNode = window.replayGainNode;
   
   // Create EQ bands
   const eqContainer = el('eqContainer');
@@ -1389,12 +1493,7 @@ function initWebAudio() {
         }
       });
 
-      nx.getConfig('eqGains').then(allGains => {
-        const val = allGains?.[freq] ?? 0;
-        filter.gain.value = val;
-        slider.value = val;
-        sliderVal.innerText = (val > 0 ? '+' : '') + val + 'dB';
-      });
+
 
       const label = document.createElement('span');
       label.className = 'text-[10px] text-slate-600 dark:text-slate-400 font-bold';
@@ -1590,6 +1689,22 @@ function initWebAudio() {
   startVisualizer();
 }
 
+async function initEQFromConfig() {
+  const allGains = await nx.getConfig('eqGains') ?? {};
+  eqBands.forEach((freq, i) => {
+    const val = allGains[freq] ?? 0;
+    filters[i].gain.value = val;
+    const sliders = document.querySelectorAll('#eqContainer input[type=range]');
+    if (sliders[i]) {
+      sliders[i].value = val;
+      const span = sliders[i].closest('.flex-col')?.querySelector('.font-mono');
+      if (span) span.innerText = (val > 0 ? '+' : '') + val + 'dB';
+    }
+  });
+}
+// Init EQ right after building graph
+initEQFromConfig();
+
 let visualizerDataArray;
 
 function renderVisualizerFrame() {
@@ -1694,137 +1809,3 @@ window.addEventListener('keydown', (e) => {
       break;
   }
 });
-
-// --- Marquee Logic ---
-function setupMarquee(container) {
-  if (!container) return false;
-  const textEl = container.querySelector('.marquee-text');
-  if (!textEl) return false;
-  
-  // Temporarily remove classes to measure true width without ::after
-  const hadAuto = container.classList.contains('marquee-auto');
-  const hadHover = container.classList.contains('has-marquee');
-  container.classList.remove('marquee-auto', 'has-marquee');
-  
-  const trueWidth = textEl.scrollWidth;
-  
-  // Set data-marquee for ::after
-  textEl.setAttribute('data-marquee', textEl.innerText);
-  
-  if (trueWidth > container.clientWidth) {
-    container.style.setProperty('--scroll-dur', `${trueWidth * 25}ms`);
-    container.classList.add('has-marquee');
-    if (hadAuto) container.classList.add('marquee-auto');
-    return true;
-  } else {
-    container.style.setProperty('--scroll-dur', `0s`);
-    container.classList.remove('has-marquee', 'marquee-auto');
-    return false;
-  }
-}
-
-document.addEventListener('mouseover', (e) => {
-  const container = e.target.closest('.marquee-container:not(.marquee-auto):not([data-measured])');
-  if (container) {
-    container.dataset.measured = '1';
-    setupMarquee(container);
-  }
-});
-
-function resetMarqueeCache() {
-  document.querySelectorAll('.marquee-container[data-measured]').forEach(el => {
-    delete el.dataset.measured;
-  });
-}
-
-// ============================================================
-// Sleep Timer
-// ============================================================
-let sleepTimerId = null;
-let sleepTimerEnd = null;
-let sleepCountdownInterval = null;
-
-function setSleepTimer(minutes) {
-  clearSleepTimer();
-  if (!minutes) return;
-  
-  sleepTimerEnd = Date.now() + minutes * 60 * 1000;
-  sleepTimerId = setTimeout(() => {
-    audioPlayer.pause();
-    clearSleepTimer();
-    showToast('Sleep timer: Playback stopped 💤');
-  }, minutes * 60 * 1000);
-
-  sleepCountdownInterval = setInterval(() => {
-    const remaining = Math.max(0, sleepTimerEnd - Date.now());
-    const m = Math.floor(remaining / 60000);
-    const s = Math.floor((remaining % 60000) / 1000);
-    const display = el('sleepTimerDisplay');
-    if (display) {
-      display.innerText = remaining > 0
-        ? `💤 ${m}:${String(s).padStart(2, '0')}`
-        : '';
-    }
-    if (remaining === 0) clearInterval(sleepCountdownInterval);
-  }, 1000);
-
-  showToast(`Sleep timer set: ${minutes} minutes`);
-}
-
-function clearSleepTimer() {
-  if (sleepTimerId) { clearTimeout(sleepTimerId); sleepTimerId = null; }
-  if (sleepCountdownInterval) { clearInterval(sleepCountdownInterval); sleepCountdownInterval = null; }
-  sleepTimerEnd = null;
-  const display = el('sleepTimerDisplay');
-  if (display) display.innerText = '';
-}
-
-el('sleepTimerSelect')?.addEventListener('change', (e) => {
-  setSleepTimer(Number(e.target.value));
-});
-
-// ============================================================
-// Crossfade Engine
-// ============================================================
-let crossfadeDuration = 3; // วินาที (0 = ปิด)
-let crossfadeTimer = null;
-
-function setCrossfadeDuration(seconds) {
-  crossfadeDuration = seconds;
-  nx.setConfig('crossfade', seconds);
-}
-
-function startCrossfade() {
-  if (!playlist.length) return;
-  const nextIdx = isShuffle && playlist.length > 1
-    ? (() => { let i; do { i = Math.floor(Math.random() * playlist.length); } while (i === currentIdx); return i; })()
-    : (currentIdx + 1) % playlist.length;
-
-  const nextAudio = new Audio(pathToSafeURL(playlist[nextIdx].path));
-  nextAudio.volume = 0;
-  nextAudio.play().catch(() => {});
-
-  const steps = 20;
-  const interval = (crossfadeDuration * 1000) / steps;
-  let step = 0;
-
-  const fade = setInterval(() => {
-    step++;
-    const t = step / steps;
-    audioPlayer.volume = Math.max(0, (1 - t) * (isMuted ? 0 : preMuteVol || 1));
-    nextAudio.volume = Math.min(1, t * (isMuted ? 0 : preMuteVol || 1));
-
-    if (step >= steps) {
-      clearInterval(fade);
-      audioPlayer.src = pathToSafeURL(playlist[nextIdx].path);
-      audioPlayer.volume = isMuted ? 0 : (preMuteVol || 1);
-      audioPlayer.play();
-      nextAudio.pause();
-      currentIdx = nextIdx;
-      loadTrackUI(nextIdx, true);
-      updatePlaylistHighlight();
-      requestSaveState();
-      crossfadeTimer = null;
-    }
-  }, interval);
-}

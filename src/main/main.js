@@ -164,8 +164,15 @@ async function extractMetadata(filePath) {
 
         // I10: Evict oldest cover images if cache exceeds limit
         try {
-          const allCovers = await fs.promises.readdir(coversDir);
-          if (allCovers.length > COVER_CACHE_LIMIT) {
+          if (global.currentCoverCount === undefined) {
+            const allCovers = await fs.promises.readdir(coversDir);
+            global.currentCoverCount = allCovers.length;
+          } else {
+            global.currentCoverCount++;
+          }
+          
+          if (global.currentCoverCount > COVER_CACHE_LIMIT) {
+            const allCovers = await fs.promises.readdir(coversDir);
             const stats = await Promise.all(
               allCovers.map(async (f) => {
                 const fp = path.join(coversDir, f);
@@ -176,6 +183,7 @@ async function extractMetadata(filePath) {
             stats.sort((a, b) => a.mtimeMs - b.mtimeMs);
             const toDelete = stats.slice(0, stats.length - COVER_CACHE_LIMIT);
             await Promise.all(toDelete.map((f) => fs.promises.unlink(f.path).catch(() => {})));
+            global.currentCoverCount = COVER_CACHE_LIMIT;
           }
         } catch (evictErr) {
           console.error('[Covers] Cache eviction error:', evictErr.message);
@@ -193,6 +201,7 @@ async function extractMetadata(filePath) {
       album: metadata.common.album || 'Unknown Album',
       duration: metadata.format.duration || 0,
       cover: coverUrl,
+      replayGain: metadata.common.replaygain_track_gain || null,
     };
   } catch (err) {
     console.error('[Metadata] Error:', err.message);
@@ -343,15 +352,23 @@ function buildTrayMenu(title, isPlaying) {
 // ============================================================================
 
 function registerMediaKeys() {
+  globalShortcut.unregisterAll();
+
+  const customShortcuts = config.shortcuts || {
+    playPause: 'CommandOrControl+Alt+P',
+    next: 'CommandOrControl+Alt+Right',
+    prev: 'CommandOrControl+Alt+Left'
+  };
+
   const keys = [
     { key: 'MediaPlayPause', channel: 'media:play-pause' },
     { key: 'MediaNextTrack', channel: 'media:next' },
-    { key: 'MediaPreviousTrack', channel: 'media:prev' },
-    // Custom Global Hotkeys
-    { key: 'CommandOrControl+Alt+P', channel: 'media:play-pause' },
-    { key: 'CommandOrControl+Alt+Right', channel: 'media:next' },
-    { key: 'CommandOrControl+Alt+Left', channel: 'media:prev' },
+    { key: 'MediaPreviousTrack', channel: 'media:prev' }
   ];
+
+  if (customShortcuts.playPause) keys.push({ key: customShortcuts.playPause, channel: 'media:play-pause' });
+  if (customShortcuts.next) keys.push({ key: customShortcuts.next, channel: 'media:next' });
+  if (customShortcuts.prev) keys.push({ key: customShortcuts.prev, channel: 'media:prev' });
 
   for (const { key, channel } of keys) {
     try {
@@ -363,6 +380,10 @@ function registerMediaKeys() {
     }
   }
 }
+
+ipcMain.on('reload-shortcuts', () => {
+  registerMediaKeys();
+});
 
 // ============================================================================
 // IPC Handlers — Window
@@ -455,6 +476,20 @@ function setupDialogIPC() {
     } catch (err) {
       console.error('[Dialog] open-folder error:', err.message);
       return [];
+    }
+  });
+
+  ipcMain.handle('dlg:select-dl-folder', async () => {
+    try {
+      const result = await dialog.showOpenDialog(win, {
+        title: 'Select Download Folder',
+        properties: ['openDirectory'],
+      });
+      if (result.canceled || !result.filePaths.length) return null;
+      return result.filePaths[0];
+    } catch (err) {
+      console.error('[Dialog] select-dl-folder error:', err.message);
+      return null;
     }
   });
 
@@ -696,36 +731,20 @@ function setupDownloadIPC() {
   });
 
   ipcMain.handle('dl:open-file', async (_event, filePath) => {
-  const { shell } = require('electron');
-  await shell.showItemInFolder(filePath);
-});
-
-// ============================================================================
-// Plugins System
-// ============================================================================
-ipcMain.handle('plugins:get-ui', async () => {
-  const pluginDir = path.join(app.getPath('userData'), 'plugins');
-  try {
-    await fs.promises.access(pluginDir);
-    const files = await fs.promises.readdir(pluginDir);
-    const scripts = [];
-    for (const f of files) {
-      if (f.endsWith('.ui.js')) {
-        const code = await fs.promises.readFile(path.join(pluginDir, f), 'utf-8');
-        scripts.push({ name: f, code });
-      }
-    }
-    return scripts;
-  } catch {
-    return [];
-  }
-});
+    const { shell } = require('electron');
+    await shell.showItemInFolder(filePath);
+  });
 
   // Get current download path
   ipcMain.handle('dl:get-path', async () => {
     return currentDlPath;
   });
+}
 
+// ============================================================================
+// File System & Download Path Handlers
+// ============================================================================
+function setupFilesystemIPC() {
   // Change download path ผ่าน folder picker
   ipcMain.handle('dl:change-path', async () => {
     try {
@@ -742,6 +761,59 @@ ipcMain.handle('plugins:get-ui', async () => {
     } catch (err) {
       console.error('[Download] change-path error:', err.message);
       return null;
+    }
+  });
+
+  ipcMain.handle('fs:readdir', async (_event, dirPath) => {
+    try {
+      const items = await fs.promises.readdir(dirPath, { withFileTypes: true });
+      const folders = [];
+      const files = [];
+      for (const item of items) {
+        if (!item.name.startsWith('.')) {
+          if (item.isDirectory()) {
+            folders.push({ name: item.name, path: path.join(dirPath, item.name) });
+          } else if (item.isFile()) {
+            files.push({ name: item.name });
+          }
+        }
+      }
+      folders.sort((a, b) => a.name.localeCompare(b.name));
+      files.sort((a, b) => a.name.localeCompare(b.name));
+      return { path: dirPath, folders, files, error: null };
+    } catch (e) {
+      return { path: dirPath, folders: [], files: [], error: e.message };
+    }
+  });
+
+  ipcMain.handle('fs:homedir', async () => {
+    return app.getPath('home');
+  });
+
+  ipcMain.handle('fs:parentdir', async (_event, dirPath) => {
+    const parent = path.dirname(dirPath);
+    return parent === dirPath ? null : parent;
+  });
+
+  ipcMain.handle('fs:set-dl-path', async (_event, newPath) => {
+    currentDlPath = newPath;
+    config.dlPath = currentDlPath;
+    await saveConfig();
+    return currentDlPath;
+  });
+
+  ipcMain.handle('fs:quick-access', async () => {
+    try {
+      return [
+        { name: 'Home', path: app.getPath('home'), icon: 'ph-house' },
+        { name: 'Desktop', path: app.getPath('desktop'), icon: 'ph-desktop' },
+        { name: 'Downloads', path: app.getPath('downloads'), icon: 'ph-download-simple' },
+        { name: 'Documents', path: app.getPath('documents'), icon: 'ph-file-text' },
+        { name: 'Music', path: app.getPath('music'), icon: 'ph-music-note' },
+        { name: 'Root', path: path.parse(app.getPath('home')).root, icon: 'ph-hard-drives' }
+      ];
+    } catch (e) {
+      return [{ name: 'Home', path: app.getPath('home'), icon: 'ph-house' }];
     }
   });
 
@@ -841,8 +913,15 @@ ipcMain.handle('plugins:get-ui', async () => {
   });
 
   // Start download — ใช้ spawn() เพื่อหลีกเลี่ยง command injection
-  ipcMain.on('dl:start', async (_event, { urls, format, quality }) => {
+  ipcMain.on('dl:start', async (_event, data) => {
+    if (!data || typeof data !== 'object') return;
+    const { urls, format, quality } = data;
     if (!Array.isArray(urls) || urls.length === 0) return;
+    
+    // IPC Validation
+    const allowedFormats = ['mp3', 'm4a', 'wav', 'flac'];
+    const safeFormat = allowedFormats.includes(format) ? format : 'mp3';
+    const safeQuality = (quality && typeof quality === 'string' && /^\d+$/.test(quality)) ? quality : '192';
 
     // B7: Prevent concurrent download batches
     if (isDownloading) {
@@ -905,7 +984,7 @@ ipcMain.handle('plugins:get-ui', async () => {
             continue;
           }
           activeCount++;
-          downloadSingleURL(dlUrl, format, quality).then(() => {
+          downloadSingleURL(dlUrl, safeFormat, safeQuality).then(() => {
             activeCount--;
             next();
           });
@@ -1179,6 +1258,10 @@ app.whenReady().then(() => {
         '.flac': 'audio/flac',
         '.ogg': 'audio/ogg',
         '.m4a': 'audio/mp4',
+        '.webm': 'audio/webm',
+        '.opus': 'audio/opus',
+        '.aac': 'audio/aac',
+        '.wma': 'audio/x-ms-wma',
         '.png': 'image/png',
         '.jpg': 'image/jpeg',
         '.jpeg': 'image/jpeg',
@@ -1218,25 +1301,15 @@ app.whenReady().then(() => {
   setupPlayerIPC();
   setupPlaylistIPC();
   setupDownloadIPC();
+  setupFilesystemIPC();
   setupConfigIPC();
   setupContextMenuIPC();
   setupTrayIPC();
 });
 
-// macOS: สร้างหน้าต่างใหม่เมื่อคลิก dock icon ถ้าไม่มี window
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  } else {
-    win?.show();
-  }
-});
-
-// ปิดแอปเมื่อปิดหน้าต่างทั้งหมด (ยกเว้น macOS)
+// ปิดแอปเมื่อปิดหน้าต่างทั้งหมด
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  app.quit();
 });
 
 // Cleanup เมื่อ quit

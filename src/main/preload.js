@@ -23,10 +23,12 @@ contextBridge.exposeInMainWorld('nexus', {
   toggleMiniPlayer: () => ipcRenderer.send('win:toggle-mini'),
   toggleAlwaysOnTop: () => ipcRenderer.send('win:toggle-always-on-top'),
   onMiniPlayerChanged: (fn) => on('win:mini-changed', fn),
+  reloadShortcuts: () => ipcRenderer.send('reload-shortcuts'),
 
   // Dialogs
   openFiles: () => ipcRenderer.invoke('dlg:open-files'),
   openFolder: () => ipcRenderer.invoke('dlg:open-folder'),
+  selectDlFolder: () => ipcRenderer.invoke('dlg:select-dl-folder'),
   resolveDrop: (paths) => ipcRenderer.invoke('dlg:resolve-drop', paths),
 
   // Player — metadata extraction via music-metadata (replaces ffmpeg cover extraction)
@@ -57,13 +59,17 @@ contextBridge.exposeInMainWorld('nexus', {
   },
   dlGetPath: () => ipcRenderer.invoke('dl:get-path'),
   dlChangePath: () => ipcRenderer.invoke('dl:change-path'),
+  fsReaddir: (p) => ipcRenderer.invoke('fs:readdir', p),
+  fsHomedir: () => ipcRenderer.invoke('fs:homedir'),
+  fsParentdir: (p) => ipcRenderer.invoke('fs:parentdir', p),
+  fsSetDlPath: (p) => ipcRenderer.invoke('fs:set-dl-path', p),
+  fsQuickAccess: () => ipcRenderer.invoke('fs:quick-access'),
   dlCheckDeps: () => ipcRenderer.invoke('dl:check-deps'),
   checkYtdlp: () => ipcRenderer.invoke('dl:check-ytdlp'),
   updateYtdlp: () => ipcRenderer.invoke('dl:update-ytdlp'),
   cancelDownload: (url) => ipcRenderer.send('dl:cancel', url),
   dlGetHistory: () => ipcRenderer.invoke('dl:get-history'),
   dlClearHistory: () => ipcRenderer.invoke('dl:clear-history'),
-  getUIPlugins: () => ipcRenderer.invoke('plugins:get-ui'),
   dlOpenFile: (fp) => ipcRenderer.invoke('dl:open-file', fp),
   onDlLog: (fn) => on('dl:log', fn),
   onDlProgress: (fn) => on('dl:progress', fn),

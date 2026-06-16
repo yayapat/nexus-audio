@@ -1175,3 +1175,23 @@ body.mini-player .ctrl-btn.auto-next-btn { display: none; }
   .player-queue { display: none; }
   .album-cover-wrap { width: 200px; height: 200px; }
 }
+
+/* ── Custom Auto-hide Scrollbar ────────────────────────────── */
+.hover-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.hover-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.hover-scrollbar::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 6px;
+  transition: background 0.2s ease;
+}
+.hover-scrollbar:hover::-webkit-scrollbar-thumb {
+  background: var(--border);
+}
+.hover-scrollbar:hover::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
