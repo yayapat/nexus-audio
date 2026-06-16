@@ -1,7 +1,7 @@
 <div align="center">
   <img src="build/icon.png" width="128" alt="Nexus Audio Logo">
   
-# 🎵 Nexus Audio
+# Nexus Audio
 
 A modern, fast, and feature-rich offline music player & downloader designed specifically for Linux. Built with Electron and optimized for performance.
 
@@ -9,22 +9,22 @@ A modern, fast, and feature-rich offline music player & downloader designed spec
 
 <hr/>
 
-## ✨ Features
+## Features
 
-- 📥 **Integrated Downloader**: Download high-quality audio seamlessly using `yt-dlp`.
-- 🎨 **Sleek Interface**: A beautiful, responsive, and distraction-free design.
-- 🪟 **Mini Player Mode**: Unobtrusive playback controls that float while you work.
-- ⚡ **Performance Optimized**: Engineered for silky smooth 60fps UI animations and low overhead.
-- ⌨️ **Hardware Integration**: Native support for media keys and desktop environments.
-- 📡 **Offline First**: Fully functional offline with zero cloud dependencies.
+- **Integrated Downloader**: Download high-quality audio seamlessly using `yt-dlp`.
+- **Sleek Interface**: A beautiful, responsive, and distraction-free design.
+- **Mini Player Mode**: Unobtrusive playback controls that float while you work.
+- **Performance Optimized**: Engineered for silky smooth 60fps UI animations and low overhead.
+- **Hardware Integration**: Native support for media keys and desktop environments.
+- **Offline First**: Fully functional offline with zero cloud dependencies.
 
 ---
 
-## 📦 Installation
+## Installation
 
 Nexus Audio supports multiple Linux distributions. Follow the instructions below for your specific distribution.
 
-### 🐧 Arch Linux / Manjaro / EndeavourOS
+### Arch Linux / Manjaro / EndeavourOS
 
 The recommended and cleanest method for Arch-based systems is using the provided `PKGBUILD` which integrates perfectly with `pacman`:
 
@@ -36,7 +36,7 @@ cd nexus-audio
 makepkg -si
 ```
 
-### 🟠 Debian / Ubuntu / Linux Mint
+### Debian / Ubuntu / Linux Mint
 
 You can easily build and install a standard `.deb` package:
 
@@ -57,7 +57,7 @@ sudo dpkg -i dist/nexus-audio_*.deb
 sudo apt-get install -f
 ```
 
-### 🔵 Fedora / openSUSE / AppImage (Universal)
+### Fedora / openSUSE / AppImage (Universal)
 
 For other distributions, or if you prefer a portable executable without installing, you can build an AppImage:
 
@@ -78,7 +78,7 @@ chmod +x dist/*.AppImage
 
 ---
 
-## 🛠️ Development Setup
+## Development Setup
 
 If you want to modify the app or run it locally in development mode:
 
@@ -96,6 +96,6 @@ npm run dev
 
 ---
 
-## 📄 License
+## License
 
 This project is open-source and licensed under the **MIT License**.
