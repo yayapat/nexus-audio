@@ -125,6 +125,26 @@ input[type=range]:disabled::-webkit-slider-runnable-track { cursor: not-allowed;
 
 /* Checkbox */
 input[type="checkbox"] { accent-color: #0ea5e9; }
+
+/* Custom Dropdown */
+.custom-dropdown { position: relative; }
+.dropdown-menu {
+  position: absolute; z-index: 50; left: 0; right: 0; top: 100%; margin-top: 0.5rem;
+  border-radius: 0.75rem; overflow: hidden;
+  opacity: 0; pointer-events: none; transform: translateY(-4px) scale(0.96);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.custom-dropdown.open .dropdown-menu {
+  opacity: 1; pointer-events: auto; transform: translateY(0) scale(1);
+}
+.dropdown-option {
+  padding: 0.625rem 1rem; font-size: 0.875rem; cursor: pointer;
+  text-align: center; font-weight: 500; transition: background 0.15s;
+}
+.dropdown-option:hover { background: #f1f5f9; }
+.dark .dropdown-option:hover { background: #334155; }
+.dropdown-option.selected { background: #f0f9ff; color: #0284c7; font-weight: 700; }
+.dark .dropdown-option.selected { background: rgba(14,165,233,0.15); color: #38bdf8; }
 </style>
 </head>
 <body class="flex flex-col h-screen w-screen relative p-[2px] bg-transparent text-slate-800 dark:text-slate-200">
@@ -133,6 +153,7 @@ input[type="checkbox"] { accent-color: #0ea5e9; }
 <!-- Custom Context Menu -->
 <div id="trackContextMenu" class="hidden absolute bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xl rounded-lg py-1 z-[100] text-sm min-w-[160px]">
    <button class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center gap-2" id="ctxPlayNext"><i class="ph-bold ph-arrow-bend-down-right text-sky-500"></i> เล่นเป็นคิวถัดไป</button>
+   <button class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center gap-2" id="ctxEditMeta"><i class="ph-bold ph-pencil-simple text-amber-500"></i> แก้ไขแท็กเพลง (MP3)</button>
    <button class="w-full text-left px-4 py-2 hover:bg-red-50 dark:hover:bg-red-500/10 text-red-500 flex items-center gap-2" id="ctxRemove"><i class="ph-bold ph-trash"></i> ลบออกจากคิว</button>
 </div>
 <!-- Titlebar พร้อมปุ่ม ย่อ ขยาย ปิด -->
@@ -358,21 +379,23 @@ input[type="checkbox"] { accent-color: #0ea5e9; }
 <div class="flex gap-3 mb-6 flex-wrap">
 <input type="text" id="dlInput" placeholder="Paste URL from YouTube, SoundCloud, or supported sites..." aria-label="Download URL" class="flex-1 min-w-[200px] bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl px-5 py-3 text-slate-700 dark:text-white text-sm outline-none focus:border-sky-400 transition">
             <div class="grid grid-cols-2 gap-4">
-              <div class="relative">
-                <select id="dlFormat" aria-label="Download format" style="text-align-last: center;" class="w-full appearance-none bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl px-4 py-3 text-center text-sm font-medium text-slate-700 dark:text-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 transition-all shadow-sm cursor-pointer hover:border-slate-300 dark:hover:border-slate-600">
-                  <option value="mp3">MP3 Audio</option>
-                  <option value="m4a">M4A (AAC)</option>
-                  <option value="wav">WAV Audio</option>
-                  <option value="flac">FLAC Audio</option>
-                </select>
+              <div class="custom-dropdown min-w-[140px]" id="dlFormat" data-value="mp3">
+                <button type="button" class="dropdown-btn w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl px-4 py-3 text-center text-sm font-medium text-slate-700 dark:text-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 transition-all shadow-sm cursor-pointer hover:border-slate-300 dark:hover:border-slate-600">MP3 Audio</button>
+                <div class="dropdown-menu bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 shadow-xl">
+                  <div class="dropdown-option selected" data-value="mp3">MP3 Audio</div>
+                  <div class="dropdown-option" data-value="m4a">M4A (AAC)</div>
+                  <div class="dropdown-option" data-value="wav">WAV Audio</div>
+                  <div class="dropdown-option" data-value="flac">FLAC Audio</div>
+                </div>
               </div>
               
-              <div id="dlQualityContainer" class="relative">
-                <select id="dlQuality" aria-label="Download quality" style="text-align-last: center;" class="w-full appearance-none bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl px-4 py-3 text-center text-sm font-medium text-slate-700 dark:text-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 transition-all shadow-sm cursor-pointer hover:border-slate-300 dark:hover:border-slate-600">
-                  <option value="320">320 kbps (Best)</option>
-                  <option value="192" selected>192 kbps (Good)</option>
-                  <option value="128">128 kbps (Basic)</option>
-                </select>
+              <div class="custom-dropdown min-w-[160px]" id="dlQualityContainer" data-value="192">
+                <button type="button" class="dropdown-btn w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl px-4 py-3 text-center text-sm font-medium text-slate-700 dark:text-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 transition-all shadow-sm cursor-pointer hover:border-slate-300 dark:hover:border-slate-600">192 kbps (Good)</button>
+                <div class="dropdown-menu bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 shadow-xl">
+                  <div class="dropdown-option" data-value="320">320 kbps (Best)</div>
+                  <div class="dropdown-option selected" data-value="192">192 kbps (Good)</div>
+                  <div class="dropdown-option" data-value="128">128 kbps (Basic)</div>
+                </div>
               </div>
             </div>
 <button id="btnDownload" class="bg-slate-800 dark:bg-sky-500 text-white px-8 rounded-xl font-semibold hover:bg-black dark:hover:bg-sky-600 transition flex items-center gap-2 shadow-md hover:-translate-y-0.5">
@@ -393,34 +416,27 @@ input[type="checkbox"] { accent-color: #0ea5e9; }
 <p class="text-slate-400 text-sm">Equalizer and Audio Visualizer configuration</p>
 </div>
 </div>
-<div class="flex items-center gap-2 mt-4 px-1 pb-4 border-b border-slate-200 dark:border-slate-700">
-  <span class="text-sm font-semibold text-slate-700 dark:text-slate-300"><i class="ph-bold ph-timer text-sky-500"></i> Sleep Timer:</span>
-  <select id="sleepTimerSelect" class="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-sm text-slate-700 dark:text-slate-200 outline-none focus:border-sky-500 cursor-pointer">
-    <option value="">Off</option>
-    <option value="15">15 minutes</option>
-    <option value="30">30 minutes</option>
-    <option value="60">1 hour</option>
-    <option value="90">1.5 hours</option>
-  </select>
-  <span id="sleepTimerDisplay" class="text-xs text-sky-500 font-mono ml-2"></span>
-</div>
+
 <div class="flex-1 bg-slate-50 dark:bg-slate-900 rounded-xl p-6 border border-slate-200 dark:border-slate-800 flex flex-col gap-6 overflow-y-auto">
 <div>
 <div class="flex items-center justify-between mb-4">
   <h3 class="text-lg font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2"><i class="ph-bold ph-sliders-horizontal text-sky-500"></i> 10-Band Equalizer</h3>
   <div class="flex gap-3 items-center">
     <span class="text-sm text-slate-500 font-medium">Preset:</span>
-    <select id="eqPreset" aria-label="Equalizer preset" class="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-700 dark:text-slate-200 outline-none focus:border-sky-500 cursor-pointer flex-1 min-w-[120px]">
-      <option value="custom">Custom (ปรับเอง)</option>
-      <option value="flat">Flat (ปกติ)</option>
-      <option value="bass_boost">Bass Boost (เน้นเบส)</option>
-      <option value="acoustic">Acoustic (อคูสติก)</option>
-      <option value="classical">Classical (คลาสสิก)</option>
-      <option value="electronic">Electronic (อิเล็กทรอนิกส์)</option>
-      <option value="pop">Pop (ป็อป)</option>
-      <option value="rock">Rock (ร็อค)</option>
-      <option value="vocal">Vocal Booster (เน้นเสียงร้อง)</option>
-    </select>
+    <div class="custom-dropdown flex-1 min-w-[120px]" id="eqPreset" data-value="custom">
+      <button type="button" class="dropdown-btn w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-700 dark:text-slate-200 outline-none focus:border-sky-500 cursor-pointer text-center">Custom (ปรับเอง)</button>
+      <div class="dropdown-menu bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 shadow-xl" style="min-width: 200px;">
+        <div class="dropdown-option selected" data-value="custom">Custom (ปรับเอง)</div>
+        <div class="dropdown-option" data-value="flat">Flat (ปกติ)</div>
+        <div class="dropdown-option" data-value="bass_boost">Bass Boost (เน้นเบส)</div>
+        <div class="dropdown-option" data-value="acoustic">Acoustic (อคูสติก)</div>
+        <div class="dropdown-option" data-value="classical">Classical (คลาสสิก)</div>
+        <div class="dropdown-option" data-value="electronic">Electronic (อิเล็กทรอนิกส์)</div>
+        <div class="dropdown-option" data-value="pop">Pop (ป็อป)</div>
+        <div class="dropdown-option" data-value="rock">Rock (ร็อค)</div>
+        <div class="dropdown-option" data-value="vocal">Vocal Booster (เน้นเสียงร้อง)</div>
+      </div>
+    </div>
     <div class="flex gap-1.5">
       <button id="btnSavePreset" class="bg-sky-100 dark:bg-sky-900/50 text-sky-600 dark:text-sky-400 px-3 py-1.5 rounded-lg hover:bg-sky-200 dark:hover:bg-sky-800 transition shadow-sm flex items-center gap-1 font-semibold text-xs" title="Save custom preset"><i class="ph-bold ph-floppy-disk text-base"></i> Save</button>
       <button id="btnDeletePreset" class="hidden bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 px-3 py-1.5 rounded-lg hover:bg-red-200 dark:hover:bg-red-800 transition shadow-sm flex items-center gap-1 font-semibold text-xs" title="Delete preset"><i class="ph-bold ph-trash text-base"></i></button>
@@ -501,6 +517,83 @@ input[type="checkbox"] { accent-color: #0ea5e9; }
     <div class="flex justify-end gap-2">
       <button id="btnCancelPreset" class="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition">Cancel</button>
       <button id="btnConfirmPreset" class="px-4 py-2 text-sm font-semibold bg-sky-500 text-white hover:bg-sky-600 rounded-lg transition">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Custom Playlist Download Modal -->
+<div id="playlistDownloadModal" class="hidden absolute inset-0 bg-black/50 z-[100] flex items-center justify-center backdrop-blur-sm">
+  <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-2xl w-[500px] max-w-[90%] max-h-[80%] border border-slate-200 dark:border-slate-700 flex flex-col">
+    <div class="flex justify-between items-center mb-2">
+      <h4 id="playlistModalTitle" class="text-lg font-bold text-slate-800 dark:text-white truncate">YouTube Playlist</h4>
+      <button id="btnPlaylistModalClose" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><i class="ph-bold ph-x text-lg"></i></button>
+    </div>
+    <p class="text-xs text-slate-500 mb-4">Select the tracks you want to download:</p>
+    
+    <!-- Checklist Container -->
+    <div class="flex-1 overflow-y-auto mb-4 border border-slate-100 dark:border-slate-700/50 rounded-xl p-2 bg-slate-50 dark:bg-slate-900/50" style="max-height: 350px;">
+      <div id="playlistItemsList" class="flex flex-col gap-1.5">
+        <!-- Dynamic playlist items here -->
+      </div>
+    </div>
+    
+    <div class="flex justify-between items-center">
+      <div class="flex gap-2">
+        <button id="btnPlaylistSelectAll" class="text-xs font-semibold text-sky-500 hover:underline">Select All</button>
+        <span class="text-xs text-slate-300 dark:text-slate-600">|</span>
+        <button id="btnPlaylistSelectNone" class="text-xs font-semibold text-slate-500 hover:underline">Clear All</button>
+      </div>
+      <div class="flex gap-2">
+        <button id="btnCancelPlaylistDl" class="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition">Cancel</button>
+        <button id="btnConfirmPlaylistDl" class="px-4 py-2 text-sm font-semibold bg-sky-500 text-white hover:bg-sky-600 rounded-lg transition">Download</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Custom Metadata Editor Modal -->
+<div id="metadataEditorModal" class="hidden absolute inset-0 bg-black/50 z-[100] flex items-center justify-center backdrop-blur-sm">
+  <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-2xl w-[450px] max-w-[90%] border border-slate-200 dark:border-slate-700 flex flex-col gap-4">
+    <div class="flex justify-between items-center">
+      <h4 class="text-lg font-bold text-slate-800 dark:text-white">Edit Track Metadata</h4>
+      <button id="btnMetaModalClose" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><i class="ph-bold ph-x text-lg"></i></button>
+    </div>
+    
+    <div class="flex gap-4">
+      <!-- Cover art block -->
+      <div class="flex flex-col items-center gap-2">
+        <div class="w-24 h-24 rounded-xl bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 overflow-hidden flex items-center justify-center relative group">
+          <img id="metaModalCoverImg" class="w-full h-full object-cover hidden">
+          <i id="metaModalCoverFallback" class="ph-fill ph-music-note text-slate-300 dark:text-slate-500 text-3xl"></i>
+          <label for="metaCoverInput" class="absolute inset-0 bg-black/50 text-white text-[10px] font-bold flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-center px-1">
+            <i class="ph-bold ph-pencil-simple text-sm mb-1"></i>
+            Change Cover
+          </label>
+          <input type="file" id="metaCoverInput" accept="image/*" class="hidden">
+        </div>
+        <button id="btnRemoveMetaCover" class="text-[10px] text-red-500 font-semibold hover:underline">Remove cover</button>
+      </div>
+      
+      <!-- Input fields -->
+      <div class="flex-1 flex flex-col gap-2.5">
+        <div>
+          <label class="text-[10px] uppercase font-bold text-slate-400 block mb-1">Title</label>
+          <input type="text" id="metaTitleInput" class="w-full bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-sky-500 text-slate-800 dark:text-white" placeholder="Song title">
+        </div>
+        <div>
+          <label class="text-[10px] uppercase font-bold text-slate-400 block mb-1">Artist</label>
+          <input type="text" id="metaArtistInput" class="w-full bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-sky-500 text-slate-800 dark:text-white" placeholder="Artist name">
+        </div>
+        <div>
+          <label class="text-[10px] uppercase font-bold text-slate-400 block mb-1">Album</label>
+          <input type="text" id="metaAlbumInput" class="w-full bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-sky-500 text-slate-800 dark:text-white" placeholder="Album name">
+        </div>
+      </div>
+    </div>
+    
+    <div class="flex justify-end gap-2 mt-2">
+      <button id="btnCancelMeta" class="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition">Cancel</button>
+      <button id="btnConfirmMeta" class="px-4 py-2 text-sm font-semibold bg-sky-500 text-white hover:bg-sky-600 rounded-lg transition">Save Changes</button>
     </div>
   </div>
 </div>

@@ -14,9 +14,7 @@ const {
   Tray,
   Notification,
   nativeImage,
-  globalShortcut,
   protocol,
-  net,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -129,16 +127,7 @@ async function findAudioFiles(dir) {
   }
 }
 
-/**
- * Sanitize text สำหรับ log output.
- * IPC log messages are displayed via textContent in the renderer,
- * so HTML escaping is unnecessary and would show literal &amp; etc.
- * Instead, strip control characters that could cause display issues.
- */
-function sanitize(text) {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
-}
+
 
 /** Extract metadata จากไฟล์เสียง — return object สำหรับ renderer */
 async function extractMetadata(filePath) {
@@ -413,38 +402,9 @@ function setupDialogIPC() {
     }
   });
 
-  ipcMain.handle('dlg:select-dl-folder', async () => {
-    try {
-      const result = await dialog.showOpenDialog(win, {
-        title: 'Select Download Folder',
-        properties: ['openDirectory'],
-      });
-      if (result.canceled || !result.filePaths.length) return null;
-      return result.filePaths[0];
-    } catch (err) {
-      console.error('[Dialog] select-dl-folder error:', err.message);
-      return null;
-    }
-  });
 
-  ipcMain.handle('dlg:resolve-drop', async (_event, paths) => {
-    try {
-      let resolved = [];
-      for (const p of paths) {
-        const stat = await fs.promises.stat(p);
-        if (stat.isDirectory()) {
-          const files = await findAudioFiles(p);
-          resolved = resolved.concat(files);
-        } else if (AUDIO_EXTENSIONS.includes(path.extname(p).toLowerCase())) {
-          resolved.push(p);
-        }
-      }
-      return resolved;
-    } catch (err) {
-      console.error('[Dialog] resolve-drop error:', err.message);
-      return [];
-    }
-  });
+
+
 }
 
 // ============================================================================
@@ -454,6 +414,49 @@ function setupDialogIPC() {
 function setupPlayerIPC() {
   ipcMain.handle('player:metadata', async (_event, filePath) => {
     return extractMetadata(filePath);
+  });
+
+  ipcMain.handle('player:save-metadata', async (_event, { filePath, title, artist, album, coverBuffer, removeCover }) => {
+    try {
+      const ext = path.extname(filePath).toLowerCase();
+      if (ext !== '.mp3') {
+        throw new Error('Only MP3 files are supported for editing.');
+      }
+      
+      const nodeID3 = require('node-id3');
+      const tags = {};
+      if (title !== undefined) tags.title = title;
+      if (artist !== undefined) tags.artist = artist;
+      if (album !== undefined) tags.album = album;
+      
+      const currentTags = nodeID3.read(filePath) || {};
+      const updatedTags = { ...currentTags, ...tags };
+      
+      if (removeCover) {
+        delete updatedTags.image;
+      } else if (coverBuffer) {
+        updatedTags.image = {
+          mime: 'image/jpeg',
+          type: {
+            id: 3,
+            name: 'front cover'
+          },
+          description: 'Front Cover',
+          imageBuffer: Buffer.from(coverBuffer)
+        };
+      }
+      
+      const success = nodeID3.write(updatedTags, filePath);
+      if (!success) {
+        throw new Error('Failed to write ID3 tags to file.');
+      }
+      
+      const newMeta = await extractMetadata(filePath);
+      return { success: true, metadata: newMeta };
+    } catch (err) {
+      console.error('[Save Metadata] Error:', err.message);
+      return { success: false, error: err.message };
+    }
   });
 
   ipcMain.on('player:notify', (_event, { title, artist, cover }) => {
@@ -526,14 +529,66 @@ function getYtdlpPath() {
   return fs.existsSync(localBin) ? localBin : 'yt-dlp';
 }
 
-function setupDownloadIPC() {  ipcMain.handle('dl:open-file', async (_event, filePath) => {
-    const { shell } = require('electron');
-    await shell.showItemInFolder(filePath);
-  });
+function setupDownloadIPC() {
 
   // Get current download path
   ipcMain.handle('dl:get-path', async () => {
     return currentDlPath;
+  });
+
+  ipcMain.handle('dl:scan-playlist', async (_event, url) => {
+    return new Promise((resolve) => {
+      const args = [
+        '--flat-playlist',
+        '-J',
+        url
+      ];
+      
+      let stdoutData = '';
+      let stderrData = '';
+      const proc = spawn(getYtdlpPath(), args);
+      
+      proc.stdout.on('data', (data) => {
+        stdoutData += data.toString();
+      });
+      
+      proc.stderr.on('data', (data) => {
+        stderrData += data.toString();
+      });
+      
+      proc.on('close', (code) => {
+        if (code === 0) {
+          try {
+            const parsed = JSON.parse(stdoutData);
+            if (parsed._type === 'playlist' && Array.isArray(parsed.entries)) {
+              const entries = parsed.entries.map(e => ({
+                title: e.title || 'Unknown Title',
+                url: e.url || `https://www.youtube.com/watch?v=${e.id}`,
+                duration: e.duration || null
+              }));
+              resolve({
+                isPlaylist: true,
+                title: parsed.title || 'Playlist',
+                entries
+              });
+            } else {
+              resolve({ isPlaylist: false });
+            }
+          } catch (err) {
+            console.error('[Scan Playlist] Parse JSON error:', err.message);
+            resolve({ isPlaylist: false, error: 'Failed to parse playlist data' });
+          }
+        } else {
+          console.error('[Scan Playlist] Error exit code:', code, stderrData);
+          resolve({ isPlaylist: false, error: stderrData || `Failed to scan (exit code ${code})` });
+        }
+      });
+      
+      proc.on('error', (err) => {
+        console.error('[Scan Playlist] Spawn error:', err.message);
+        resolve({ isPlaylist: false, error: err.message });
+      });
+    });
   });
 }
 
@@ -560,58 +615,7 @@ function setupFilesystemIPC() {
     }
   });
 
-  ipcMain.handle('fs:readdir', async (_event, dirPath) => {
-    try {
-      const items = await fs.promises.readdir(dirPath, { withFileTypes: true });
-      const folders = [];
-      const files = [];
-      for (const item of items) {
-        if (!item.name.startsWith('.')) {
-          if (item.isDirectory()) {
-            folders.push({ name: item.name, path: path.join(dirPath, item.name) });
-          } else if (item.isFile()) {
-            files.push({ name: item.name });
-          }
-        }
-      }
-      folders.sort((a, b) => a.name.localeCompare(b.name));
-      files.sort((a, b) => a.name.localeCompare(b.name));
-      return { path: dirPath, folders, files, error: null };
-    } catch (e) {
-      return { path: dirPath, folders: [], files: [], error: e.message };
-    }
-  });
 
-  ipcMain.handle('fs:homedir', async () => {
-    return app.getPath('home');
-  });
-
-  ipcMain.handle('fs:parentdir', async (_event, dirPath) => {
-    const parent = path.dirname(dirPath);
-    return parent === dirPath ? null : parent;
-  });
-
-  ipcMain.handle('fs:set-dl-path', async (_event, newPath) => {
-    currentDlPath = newPath;
-    config.dlPath = currentDlPath;
-    await saveConfig();
-    return currentDlPath;
-  });
-
-  ipcMain.handle('fs:quick-access', async () => {
-    try {
-      return [
-        { name: 'Home', path: app.getPath('home'), icon: 'ph-house' },
-        { name: 'Desktop', path: app.getPath('desktop'), icon: 'ph-desktop' },
-        { name: 'Downloads', path: app.getPath('downloads'), icon: 'ph-download-simple' },
-        { name: 'Documents', path: app.getPath('documents'), icon: 'ph-file-text' },
-        { name: 'Music', path: app.getPath('music'), icon: 'ph-music-note' },
-        { name: 'Root', path: path.parse(app.getPath('home')).root, icon: 'ph-hard-drives' }
-      ];
-    } catch (e) {
-      return [{ name: 'Home', path: app.getPath('home'), icon: 'ph-house' }];
-    }
-  });
 
 
 
@@ -629,57 +633,7 @@ function setupFilesystemIPC() {
     return { ytdlp, ffmpeg };
   });
 
-  ipcMain.handle('dl:check-ytdlp', async () => {
-    return new Promise((resolve) => {
-      const proc = spawn(getYtdlpPath(), ['--version']);
-      let stdout = '';
-      
-      const timeout = setTimeout(() => {
-        proc.kill();
-        resolve({ version: 'Timeout', hasUpdate: false });
-      }, 10000);
 
-      proc.stdout.on('data', (data) => { stdout += data.toString(); });
-      
-      proc.on('close', (code) => {
-        clearTimeout(timeout);
-        if (code !== 0) return resolve({ version: 'Unknown', hasUpdate: false });
-        
-        const currentVersion = stdout.trim();
-        fetch('https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest', { headers: { 'User-Agent': 'Nexus-Audio' } })
-          .then(res => res.json())
-          .then(data => {
-            const latestVersion = data.tag_name;
-            const hasUpdate = latestVersion && latestVersion !== currentVersion && !currentVersion.includes('Unknown');
-            resolve({ version: currentVersion, latestVersion, hasUpdate });
-          })
-          .catch(() => resolve({ version: currentVersion, hasUpdate: false }));
-      });
-      
-      proc.on('error', () => {
-        clearTimeout(timeout);
-        resolve({ version: 'Unknown', hasUpdate: false });
-      });
-    });
-  });
-
-  ipcMain.handle('dl:update-ytdlp', async () => {
-    return new Promise((resolve) => {
-      const binPath = path.join(app.getPath('userData'), 'yt-dlp');
-      const proc = spawn('curl', ['-L', 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux', '-o', binPath]);
-      
-      proc.on('close', (code) => {
-        if (code === 0) {
-          spawn('chmod', ['+x', binPath]).on('close', () => {
-            resolve({ success: true, message: 'Updated local yt-dlp successfully!' });
-          });
-        } else {
-          resolve({ success: false, message: 'Failed to download yt-dlp binary.' });
-        }
-      });
-      proc.on('error', (err) => resolve({ success: false, message: err.message }));
-    });
-  });
 
   ipcMain.on('dl:cancel', (_event, url) => {
     cancelledUrls.add(url);
@@ -816,8 +770,7 @@ function downloadSingleURL(url, format, quality) {
       for (const line of lines) {
         if (!line.trim()) continue;
 
-        // ส่ง log ทุกบรรทัดไปที่ renderer
-        win?.webContents.send('dl:log', sanitize(line));
+
 
         // Parse progress: [download]   0.4% of  246.27KiB at  Unknown B/s ETA Unknown
         const progressMatch = line.match(/\[download\]\s+([\d.]+)%/);
@@ -848,15 +801,6 @@ function downloadSingleURL(url, format, quality) {
         } else if (line.includes('has already been downloaded')) {
           const m = line.match(/\[download\]\s+(.*?)\s+has already been downloaded/);
           if (m) outputFilePath = m[1].trim();
-        }
-      }
-    });
-
-    proc.stderr.on('data', (data) => {
-      const lines = data.toString().split('\n');
-      for (const line of lines) {
-        if (line.trim()) {
-          win?.webContents.send('dl:log', sanitize(line));
         }
       }
     });
@@ -892,7 +836,7 @@ function downloadSingleURL(url, format, quality) {
 
     proc.on('error', (err) => {
       console.error('[Download] spawn error:', err.message);
-      win?.webContents.send('dl:log', `[Error] ${sanitize(err.message)}`);
+
       win?.webContents.send('dl:error', { url, message: `Spawn error: ${err.message}` });
       activeDownloads.delete(url);
       resolve();

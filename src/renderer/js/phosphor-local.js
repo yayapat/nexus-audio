@@ -1,10 +1,1 @@
-var head = document.getElementsByTagName("head")[0];
-
-const root = window._appRoot || '';
-for (const weight of ["regular", "thin", "light", "bold", "fill", "duotone"]) {
-  var link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.type = "text/css";
-  link.href = `${root}node_modules/@phosphor-icons/web/src/${weight}/style.css`;
-  head.appendChild(link);
-}
+['regular','thin','light','bold','fill','duotone'].forEach(w => document.head.insertAdjacentHTML('beforeend', `<link rel="stylesheet" href="${window._appRoot || ''}node_modules/@phosphor-icons/web/src/${w}/style.css">`));

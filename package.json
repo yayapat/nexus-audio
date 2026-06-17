@@ -35,7 +35,8 @@
     },
     "files": [
       "src/**/*",
-      "package.json"
+      "package.json",
+      "build/icon.png"
     ],
     "directories": {
       "output": "dist"
@@ -43,7 +44,8 @@
   },
   "dependencies": {
     "@phosphor-icons/web": "^2.1.2",
-    "music-metadata": "^7.14.0"
+    "music-metadata": "^7.14.0",
+    "node-id3": "^0.2.9"
   },
   "devDependencies": {
     "electron": "^42.4.0",

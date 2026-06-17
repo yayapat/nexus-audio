@@ -23,13 +23,12 @@ contextBridge.exposeInMainWorld('nexus', {
   toggleMiniPlayer: () => ipcRenderer.send('win:toggle-mini'),
   toggleAlwaysOnTop: () => ipcRenderer.send('win:toggle-always-on-top'),
   onMiniPlayerChanged: (fn) => on('win:mini-changed', fn),
-  reloadShortcuts: () => ipcRenderer.send('reload-shortcuts'),
+
 
   // Dialogs
   openFiles: () => ipcRenderer.invoke('dlg:open-files'),
   openFolder: () => ipcRenderer.invoke('dlg:open-folder'),
-  selectDlFolder: () => ipcRenderer.invoke('dlg:select-dl-folder'),
-  resolveDrop: (paths) => ipcRenderer.invoke('dlg:resolve-drop', paths),
+
 
   // Player — metadata extraction via music-metadata (replaces ffmpeg cover extraction)
   extractMetadata: (fp) => {
@@ -41,6 +40,7 @@ contextBridge.exposeInMainWorld('nexus', {
   onMediaPause: (fn) => on('media:pause', fn),
   onMediaNext: (fn) => on('media:next', fn),
   onMediaPrev: (fn) => on('media:prev', fn),
+  saveMetadata: (d) => ipcRenderer.invoke('player:save-metadata', d),
 
   // Playlist persistence
   saveState: (d) => ipcRenderer.invoke('pl:save-state', d),
@@ -53,17 +53,9 @@ contextBridge.exposeInMainWorld('nexus', {
   },
   dlGetPath: () => ipcRenderer.invoke('dl:get-path'),
   dlChangePath: () => ipcRenderer.invoke('dl:change-path'),
-  fsReaddir: (p) => ipcRenderer.invoke('fs:readdir', p),
-  fsHomedir: () => ipcRenderer.invoke('fs:homedir'),
-  fsParentdir: (p) => ipcRenderer.invoke('fs:parentdir', p),
-  fsSetDlPath: (p) => ipcRenderer.invoke('fs:set-dl-path', p),
-  fsQuickAccess: () => ipcRenderer.invoke('fs:quick-access'),
   dlCheckDeps: () => ipcRenderer.invoke('dl:check-deps'),
-  checkYtdlp: () => ipcRenderer.invoke('dl:check-ytdlp'),
-  updateYtdlp: () => ipcRenderer.invoke('dl:update-ytdlp'),
+  dlScanPlaylist: (url) => ipcRenderer.invoke('dl:scan-playlist', url),
   cancelDownload: (url) => ipcRenderer.send('dl:cancel', url),
-  dlOpenFile: (fp) => ipcRenderer.invoke('dl:open-file', fp),
-  onDlLog: (fn) => on('dl:log', fn),
   onDlProgress: (fn) => on('dl:progress', fn),
   onDlSuccess: (fn) => on('dl:success', fn),
   onDlError: (fn) => on('dl:error', fn),
